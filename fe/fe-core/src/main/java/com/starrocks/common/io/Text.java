@@ -405,6 +405,7 @@ public class Text implements Writable {
      * Write a UTF8 encoded string to out
      */
     public static int writeString(DataOutput out, String s) throws IOException {
+        // 转换字节数组，UTF-8 编码
         ByteBuffer bytes = encode(s);
         int length = bytes.limit();
         if (length > MAX_BYTES_TO_WRITE) {

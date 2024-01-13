@@ -503,7 +503,7 @@ public class PlanFragment extends TreeNode<PlanFragment> {
             outputBuilder.append(outputExprs.stream().map(Expr::toSql)
                     .collect(Collectors.joining(" | ")));
         }
-        str.append(outputBuilder.toString());
+        str.append(outputBuilder);
         str.append("\n");
         str.append("  Input Partition: ").append(dataPartition.getExplainString(TExplainLevel.NORMAL));
         if (sink != null) {

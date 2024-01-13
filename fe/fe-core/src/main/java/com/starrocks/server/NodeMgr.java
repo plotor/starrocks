@@ -163,7 +163,9 @@ public class NodeMgr {
     }
 
     public void initialize(String[] args) throws Exception {
+        // 获取 FE 内部通信端口（默认为 9010），并校验端口是否占用
         getCheckedSelfHostPort();
+        // 解析 `-helper` 参数配置的节点信息，并添加到 `NodeMgr#helperNodes` 中
         getHelperNodes(args);
     }
 
@@ -248,7 +250,9 @@ public class NodeMgr {
     }
 
     public void getClusterIdAndRoleOnStartup() throws IOException {
+        // meta/image/ROLE 文件
         File roleFile = new File(this.imageDir, Storage.ROLE_FILE);
+        // meta/image/VERSION 文件
         File versionFile = new File(this.imageDir, Storage.VERSION_FILE);
 
         boolean isVersionFileChanged = false;
@@ -257,7 +261,7 @@ public class NodeMgr {
 
         // if helper node is point to self, or there is ROLE and VERSION file in local.
         // get the node type from local
-        if (isMyself() || (roleFile.exists() && versionFile.exists())) {
+        if (isMyself() || (roleFile.exists() && versionFile.exists())) { // 从本地文件读取
 
             if (!isMyself()) {
                 LOG.info("find ROLE and VERSION file in local, ignore helper nodes: {}", helperNodes);
@@ -332,7 +336,7 @@ public class NodeMgr {
                 runMode = storage.getRunMode();
                 isFirstTimeStartUp = false;
             }
-        } else {
+        } else { // 从 helper 节点读取
             // try to get role and node name from helper node,
             // this loop will not end until we get certain role type and name
             while (true) {
@@ -719,7 +723,7 @@ public class NodeMgr {
      * frontend log is deleted because of checkpoint.
      */
     public void checkCurrentNodeExist() {
-        if (Config.metadata_failure_recovery.equals("true")) {
+        if ("true".equals(Config.metadata_failure_recovery)) {
             return;
         }
 

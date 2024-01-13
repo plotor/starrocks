@@ -59,6 +59,7 @@ public class SqlParser {
 
     public static List<StatementBase> parse(String sql, SessionVariable sessionVariable) {
         if (sessionVariable.getSqlDialect().equalsIgnoreCase("trino")) {
+            // 兼容 Trino 方言
             return parseWithTrinoDialect(sql, sessionVariable);
         } else {
             return parseWithStarRocksDialect(sql, sessionVariable);
@@ -97,13 +98,15 @@ public class SqlParser {
 
     private static List<StatementBase> parseWithStarRocksDialect(String sql, SessionVariable sessionVariable) {
         List<StatementBase> statements = Lists.newArrayList();
+        // 构造语法解析器
         StarRocksParser parser = parserBuilder(sql, sessionVariable);
-        List<StarRocksParser.SingleStatementContext> singleStatementContexts =
-                parser.sqlStatements().singleStatement();
+        List<StarRocksParser.SingleStatementContext> singleStatementContexts
+                = parser.sqlStatements().singleStatement();
         for (int idx = 0; idx < singleStatementContexts.size(); ++idx) {
             HintCollector collector = new HintCollector((CommonTokenStream) parser.getTokenStream());
             collector.collect(singleStatementContexts.get(idx));
 
+            // AstBuilder 是 Antlr Visitor 实现
             AstBuilder astBuilder = new AstBuilder(sessionVariable.getSqlMode(), collector.getContextWithHintMap());
             StatementBase statement = (StatementBase) astBuilder.visitSingleStatement(singleStatementContexts.get(idx));
             statement.setOrigStmt(new OriginStatement(sql, idx));

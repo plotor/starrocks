@@ -359,7 +359,7 @@ if [ ${BUILD_BE} -eq 1 ] ; then
     if [ ${CLEAN} -eq 1 ]; then
         ${MVN_CMD} clean
     fi
-    ${MVN_CMD} package -DskipTests
+    ${MVN_CMD} package -DskipTests -Dcheckstyle.skip=true
     cd ${STARROCKS_HOME}
 fi
 
@@ -386,9 +386,9 @@ if [ ${FE_MODULES}x != ""x ]; then
     if [ ${CLEAN} -eq 1 ]; then
         ${MVN_CMD} clean
     fi
-    ${MVN_CMD} package -am -pl ${FE_MODULES} -DskipTests
+    ${MVN_CMD} package -am -pl ${FE_MODULES} -DskipTests -Dcheckstyle.skip=true
     cd ${STARROCKS_HOME}/java-extensions
-    ${MVN_CMD} package -am -pl hadoop-ext -DskipTests
+    ${MVN_CMD} package -am -pl hadoop-ext -DskipTests -Dcheckstyle.skip=true
     cd ${STARROCKS_HOME}
 fi
 

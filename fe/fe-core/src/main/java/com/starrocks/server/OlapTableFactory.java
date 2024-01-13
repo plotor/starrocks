@@ -94,14 +94,17 @@ public class OlapTableFactory implements AbstractTableFactory {
 
         // create columns
         List<Column> baseSchema = stmt.getColumns();
+        // 校验 column：必须有 Key 列，Key 列必须排在前面
         metastore.validateColumns(baseSchema);
 
         // create partition info
         PartitionDesc partitionDesc = stmt.getPartitionDesc();
         PartitionInfo partitionInfo;
+        // partitionName -> partitionId
         Map<String, Long> partitionNameToId = Maps.newHashMap();
+        // 定义了分区信息
         if (partitionDesc != null) {
-            // gen partition id first
+            // gen partition id first，为每个 Partition 自增生成 ID
             if (partitionDesc instanceof RangePartitionDesc) {
                 RangePartitionDesc rangePartitionDesc = (RangePartitionDesc) partitionDesc;
                 for (SingleRangePartitionDesc desc : rangePartitionDesc.getSingleRangePartitionDescs()) {
@@ -125,6 +128,7 @@ public class OlapTableFactory implements AbstractTableFactory {
             } else {
                 throw new DdlException("Currently only support range or list partition with engine type olap");
             }
+            // 按照类型构造对应的 PartitionInfo 实例
             partitionInfo = partitionDesc.toPartitionInfo(baseSchema, partitionNameToId, false);
 
             // Automatic partitioning needs to ensure that at least one tablet is opened.
@@ -138,8 +142,9 @@ public class OlapTableFactory implements AbstractTableFactory {
                 partitionInfo.createAutomaticShadowPartition(partitionId, replicateNum);
                 partitionNameToId.put(ExpressionRangePartitionInfo.AUTOMATIC_SHADOW_PARTITION_NAME, partitionId);
             }
-
-        } else {
+        }
+        // 非分区信息，以表名作为默认分区名
+        else {
             if (DynamicPartitionUtil.checkDynamicPartitionPropertiesExist(stmt.getProperties())) {
                 throw new DdlException("Only support dynamic partition properties on range partition table");
             }
@@ -186,6 +191,7 @@ public class OlapTableFactory implements AbstractTableFactory {
         // create table
         long tableId = GlobalStateMgr.getCurrentState().getNextId();
         OlapTable table;
+        // 外表
         if (stmt.isExternal()) {
             table = new ExternalOlapTable(db.getId(), tableId, tableName, baseSchema, keysType, partitionInfo,
                     distributionInfo, indexes, properties);
@@ -200,6 +206,7 @@ public class OlapTableFactory implements AbstractTableFactory {
             if (properties != null && properties.containsKey(PropertyAnalyzer.PROPERTIES_STORAGE_VOLUME)) {
                 volume = properties.remove(PropertyAnalyzer.PROPERTIES_STORAGE_VOLUME);
             }
+            // 存算分离
             if (runMode == RunMode.SHARED_DATA) {
                 if (volume.equals(StorageVolumeMgr.LOCAL)) {
                     throw new DdlException("Cannot create table " +
@@ -212,7 +219,9 @@ public class OlapTableFactory implements AbstractTableFactory {
                 }
                 String storageVolumeId = svm.getStorageVolumeIdOfTable(tableId);
                 metastore.setLakeStorageInfo(db, table, storageVolumeId, properties);
-            } else {
+            }
+            // 存算一体
+            else {
                 table = new OlapTable(tableId, tableName, baseSchema, keysType, partitionInfo, distributionInfo, indexes);
             }
         } else {
@@ -230,12 +239,14 @@ public class OlapTableFactory implements AbstractTableFactory {
             Set<String> bfColumns = null;
             double bfFpp = 0;
             try {
+                // 解析布隆过滤器索引列
                 bfColumns = PropertyAnalyzer.analyzeBloomFilterColumns(properties, baseSchema,
                         table.getKeysType() == KeysType.PRIMARY_KEYS);
                 if (bfColumns != null && bfColumns.isEmpty()) {
                     bfColumns = null;
                 }
 
+                // 解析布隆过滤器的误识别率
                 bfFpp = PropertyAnalyzer.analyzeBloomFilterFpp(properties);
                 if (bfColumns != null && bfFpp == 0) {
                     bfFpp = FeConstants.DEFAULT_BLOOM_FILTER_FPP;
@@ -275,6 +286,8 @@ public class OlapTableFactory implements AbstractTableFactory {
                     table.getKeysType() == KeysType.PRIMARY_KEYS);
             boolean enablePersistentIndex = analyzeRet.first;
             boolean enablePersistentIndexByUser = analyzeRet.second;
+            // 持久化索引，且是存算分离表 or 视图
+            // 自 3.1 版本起，存算分离模式支持创建主键表，并且自 3.1.4 版本起，支持基于本地磁盘上的持久化索引
             if (enablePersistentIndex && table.isCloudNativeTable()) {
                 TPersistentIndexType persistentIndexType;
                 try {
@@ -329,7 +342,7 @@ public class OlapTableFactory implements AbstractTableFactory {
                 throw new DdlException(e.getMessage());
             }
 
-            // replicated storage
+            // replicated storage，设置副本之间的数据同步方式
             table.setEnableReplicatedStorage(
                     PropertyAnalyzer.analyzeBooleanProp(
                             properties, PropertyAnalyzer.PROPERTIES_REPLICATED_STORAGE,
@@ -350,6 +363,7 @@ public class OlapTableFactory implements AbstractTableFactory {
                 throw new DdlException(e.getMessage());
             }
 
+            // 存算分离表 or 视图，设置热数据有效期
             if (table.isCloudNativeTable()) {
                 if (properties != null) {
                     try {
@@ -363,6 +377,7 @@ public class OlapTableFactory implements AbstractTableFactory {
                 }
             }
 
+            // 设置数据自动降冷的时间，即从 SSD 转移到 HDD
             if (properties != null) {
                 if (properties.containsKey(PropertyAnalyzer.PROPERTIES_STORAGE_COOLDOWN_TTL) ||
                         properties.containsKey(PropertyAnalyzer.PROPERTIES_STORAGE_COOLDOWN_TIME)) {
@@ -471,7 +486,7 @@ public class OlapTableFactory implements AbstractTableFactory {
                 Long baseRollupIndex = table.getIndexIdByName(tableName);
 
                 // get storage type for rollup index
-                TStorageType rollupIndexStorageType = null;
+                TStorageType rollupIndexStorageType;
                 try {
                     rollupIndexStorageType = PropertyAnalyzer.analyzeStorageType(addRollupClause.getProperties());
                 } catch (AnalysisException e) {
@@ -490,7 +505,7 @@ public class OlapTableFactory implements AbstractTableFactory {
             }
 
             // analyze version info
-            Long version = null;
+            Long version;
             try {
                 version = PropertyAnalyzer.analyzeVersionInfo(properties);
             } catch (AnalysisException e) {
@@ -524,6 +539,7 @@ public class OlapTableFactory implements AbstractTableFactory {
             }
 
             try {
+                // 解析 `unique_constraints` 和 `foreign_key_constraints` 配置，用于指导优化器重写
                 processConstraint(db, table, properties);
             } catch (AnalysisException e) {
                 throw new DdlException(
@@ -533,13 +549,14 @@ public class OlapTableFactory implements AbstractTableFactory {
 
             // a set to record every new tablet created when create table
             // if failed in any step, use this set to do clear things
-            Set<Long> tabletIdSet = new HashSet<Long>();
+            Set<Long> tabletIdSet = new HashSet<>();
 
             // do not create partition for external table
             if (table.isOlapOrCloudNativeTable()) {
+                // 非分区表
                 if (partitionInfo.getType() == PartitionType.UNPARTITIONED) {
                     if (properties != null && !properties.isEmpty()) {
-                        // here, all properties should be checked
+                        // here, all properties should be checked，仍然存在未解析的配置，不符合预期
                         throw new DdlException("Unknown properties: " + properties);
                     }
 
@@ -548,7 +565,9 @@ public class OlapTableFactory implements AbstractTableFactory {
                     Partition partition = metastore.createPartition(db, table, partitionId, tableName, version, tabletIdSet);
                     metastore.buildPartitions(db, table, Collections.singletonList(partition));
                     table.addPartition(partition);
-                } else if (partitionInfo.isRangePartition() || partitionInfo.getType() == PartitionType.LIST) {
+                }
+                // Range 分区 or List 分区
+                else if (partitionInfo.isRangePartition() || partitionInfo.getType() == PartitionType.LIST) {
                     try {
                         // just for remove entries in stmt.getProperties(),
                         // and then check if there still has unknown properties
@@ -556,6 +575,8 @@ public class OlapTableFactory implements AbstractTableFactory {
                         if (properties != null) {
                             hasMedium = properties.containsKey(PropertyAnalyzer.PROPERTIES_STORAGE_MEDIUM);
                         }
+
+                        //
                         DataProperty dataProperty = PropertyAnalyzer.analyzeDataProperty(properties,
                                 DataProperty.getInferredDefaultDataProperty(), false);
                         DynamicPartitionUtil.checkAndSetDynamicPartitionProperty(table, properties);
@@ -580,12 +601,16 @@ public class OlapTableFactory implements AbstractTableFactory {
 
                     // this is a 2-level partitioned tables
                     List<Partition> partitions = new ArrayList<>(partitionNameToId.size());
+                    // 遍历创建 Partition，期间会为每个 Partition 创建 bucketNum 数量的 Tablet
                     for (Map.Entry<String, Long> entry : partitionNameToId.entrySet()) {
-                        Partition partition = metastore.createPartition(db, table, entry.getValue(), entry.getKey(), version,
-                                tabletIdSet);
+                        // partitionName -> partitionId
+                        Partition partition = metastore.createPartition(
+                                db, table, entry.getValue(), entry.getKey(), version, tabletIdSet);
                         partitions.add(partition);
                     }
                     // It's ok if partitions is empty.
+                    // 针对每个 Partition 构造对应的 CreateReplicaTask 任务，并以 Thrift RPC 形式发送给对应的 BE 执行
+                    // 阻塞等待执行结果
                     metastore.buildPartitions(db, table, partitions);
                     for (Partition partition : partitions) {
                         table.addPartition(partition);

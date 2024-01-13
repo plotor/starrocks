@@ -81,9 +81,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
-/* this class contains the reference to bdb environment.
+/**
+ * this class contains the reference to bdb environment.
  * including all the opened databases and the replicationGroupAdmin.
  * we can get the information of this bdb group through the API of replicationGroupAdmin
+ *
+ * 封装基础的配置定义及 open、remove database 的方法，并持有所有已经 open 的 database
  */
 public class BDBEnvironment {
     private static final Logger LOG = LogManager.getLogger(BDBEnvironment.class);

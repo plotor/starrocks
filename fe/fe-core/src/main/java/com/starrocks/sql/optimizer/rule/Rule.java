@@ -42,7 +42,9 @@ import java.util.List;
  * indicating implementation rules are always scheduled earlier
  */
 public abstract class Rule {
+
     private final RuleType type;
+
     private final Pattern pattern;
 
     protected Rule(RuleType type, Pattern pattern) {

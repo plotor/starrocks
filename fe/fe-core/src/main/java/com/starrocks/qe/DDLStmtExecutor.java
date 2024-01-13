@@ -241,6 +241,7 @@ public class DDLStmtExecutor {
         @Override
         public ShowResultSet visitCreateTableStatement(CreateTableStmt stmt, ConnectContext context) {
             ErrorReport.wrapWithRuntimeException(() -> {
+                // 调用 MetadataMgr 创建 Table
                 context.getGlobalStateMgr().getMetadataMgr().createTable(stmt);
             });
             return null;

@@ -142,6 +142,7 @@ import com.starrocks.sql.common.MetaUtils;
 import com.starrocks.sql.common.StarRocksPlannerException;
 import com.starrocks.sql.optimizer.dump.QueryDumpInfo;
 import com.starrocks.sql.parser.ParsingException;
+import com.starrocks.sql.parser.SqlParser;
 import com.starrocks.sql.plan.ExecPlan;
 import com.starrocks.statistic.AnalyzeJob;
 import com.starrocks.statistic.AnalyzeMgr;
@@ -421,6 +422,7 @@ public class StmtExecutor {
         // Try to use query id as execution id when execute first time.
         UUID uuid = context.getQueryId();
         context.setExecutionId(UUIDUtil.toTUniqueId(uuid));
+        // 获取所有的 Session 变量
         SessionVariable sessionVariableBackup = context.getSessionVariable();
         try {
             // parsedStmt may already by set when constructing this StmtExecutor();
@@ -433,17 +435,20 @@ public class StmtExecutor {
                 // set isQuery before `forwardToLeader` to make it right for audit log.
                 context.getState().setIsQuery(isQuery);
 
-                if (isQuery &&
-                        ((QueryStatement) parsedStmt).getQueryRelation() instanceof SelectRelation) {
+                if (isQuery && ((QueryStatement) parsedStmt).getQueryRelation() instanceof SelectRelation) {
                     SelectRelation selectRelation = (SelectRelation) ((QueryStatement) parsedStmt).getQueryRelation();
                     optHints = selectRelation.getSelectList().getOptHints();
                 }
 
+                // 尝试自从 query hint 中解析 session 变量
                 if (optHints != null) {
                     SessionVariable sessionVariable = (SessionVariable) sessionVariableBackup.clone();
                     for (String key : optHints.keySet()) {
-                        VariableMgr.setSystemVariable(sessionVariable,
-                                new SystemVariable(key, new StringLiteral(optHints.get(key))), true);
+                        VariableMgr.setSystemVariable(
+                                sessionVariable,
+                                new SystemVariable(key, new StringLiteral(optHints.get(key))),
+                                true
+                        );
                     }
                     context.setSessionVariable(sessionVariable);
                 }
@@ -456,7 +461,6 @@ public class StmtExecutor {
             // execPlan is the output of new planner
             ExecPlan execPlan = null;
             boolean execPlanBuildByNewPlanner = false;
-
             try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Total")) {
                 redirectStatus = parsedStmt.getRedirectStatus();
                 if (!isForwardToLeader()) {
@@ -469,6 +473,7 @@ public class StmtExecutor {
                         context.getDumpInfo().setOriginStmt(parsedStmt.getOrigStmt().originStmt);
                         context.getDumpInfo().setStatement(parsedStmt);
                     }
+
                     if (parsedStmt instanceof ShowStmt) {
                         com.starrocks.sql.analyzer.Analyzer.analyze(parsedStmt, context);
                         Authorizer.check(parsedStmt, context);
@@ -479,6 +484,8 @@ public class StmtExecutor {
                             execPlan = StatementPlanner.plan(parsedStmt, context);
                         }
                     } else {
+                        // QueryStatement -> ExecPlan
+                        LOG.info("Plan for {}", parsedStmt.getOrigStmt().originStmt);
                         execPlan = StatementPlanner.plan(parsedStmt, context);
                         if (parsedStmt instanceof QueryStatement && context.shouldDumpQuery()) {
                             context.getDumpInfo().setExplainInfo(execPlan.getExplainString(TExplainLevel.COSTS));
@@ -506,6 +513,7 @@ public class StmtExecutor {
             if (context.isHTTPQueryDump) {
                 return;
             }
+
             if (isForwardToLeader()) {
                 context.setIsForward(true);
                 forwardToLeader();
@@ -525,8 +533,7 @@ public class StmtExecutor {
                 if (Config.enable_sql_blacklist && !parsedStmt.isExplain()) {
                     OriginStatement origStmt = parsedStmt.getOrigStmt();
                     if (origStmt != null) {
-                        String originSql = origStmt.originStmt.trim()
-                                .toLowerCase().replaceAll(" +", " ");
+                        String originSql = origStmt.originStmt.trim().toLowerCase().replaceAll(" +", " ");
                         // If this sql is in blacklist, show message.
                         SqlBlackList.verifying(originSql);
                     }
@@ -545,14 +552,15 @@ public class StmtExecutor {
                         //reset query id for each retry
                         if (i > 0) {
                             uuid = UUID.randomUUID();
-                            LOG.info("transfer QueryId: {} to {}", DebugUtil.printId(context.getQueryId()),
-                                    DebugUtil.printId(uuid));
+                            LOG.info("Transfer QueryId: {} to {}",
+                                    DebugUtil.printId(context.getQueryId()), DebugUtil.printId(uuid));
                             context.setExecutionId(
                                     new TUniqueId(uuid.getMostSignificantBits(), uuid.getLeastSignificantBits()));
                         }
 
                         Preconditions.checkState(execPlanBuildByNewPlanner, "must use new planner");
 
+                        // 执行 ExecPlan
                         handleQueryStmt(retryContext.getExecPlan());
                         break;
                     } catch (Exception e) {
@@ -595,8 +603,10 @@ public class StmtExecutor {
                             }
                         }
                         if (isAsync) {
-                            QeProcessorImpl.INSTANCE.monitorQuery(context.getExecutionId(), System.currentTimeMillis() +
-                                    context.getSessionVariable().getProfileTimeout() * 1000L);
+                            QeProcessorImpl.INSTANCE.monitorQuery(
+                                    context.getExecutionId(),
+                                    System.currentTimeMillis() + context.getSessionVariable().getProfileTimeout() * 1000L
+                            );
                         } else {
                             QeProcessorImpl.INSTANCE.unregisterQuery(context.getExecutionId());
                         }
@@ -685,8 +695,7 @@ public class StmtExecutor {
                 if (Config.enable_sql_blacklist) {
                     OriginStatement origStmt = parsedStmt.getOrigStmt();
                     if (origStmt != null) {
-                        String originSql = origStmt.originStmt.trim()
-                                .toLowerCase().replaceAll(" +", " ");
+                        String originSql = origStmt.originStmt.trim().toLowerCase().replaceAll(" +", " ");
                         // If this sql is in blacklist, show message.
                         SqlBlackList.verifying(originSql);
                     }
@@ -728,8 +737,7 @@ public class StmtExecutor {
         if (parsedStmt == null) {
             List<StatementBase> stmts;
             try {
-                stmts = com.starrocks.sql.parser.SqlParser.parse(originStmt.originStmt,
-                        context.getSessionVariable());
+                stmts = SqlParser.parse(originStmt.originStmt, context.getSessionVariable());
                 parsedStmt = stmts.get(originStmt.idx);
                 parsedStmt.setOrigStmt(originStmt);
             } catch (ParsingException parsingException) {
@@ -1221,7 +1229,7 @@ public class StmtExecutor {
                     analyzeJob.getTableId());
             tableNames.forEach(tableName ->
                     checkTblPrivilegeForKillAnalyzeStmt(context, tableName.getCatalog(), tableName.getDb(),
-                        tableName.getTbl(), analyzeId)
+                            tableName.getTbl(), analyzeId)
             );
         }
     }

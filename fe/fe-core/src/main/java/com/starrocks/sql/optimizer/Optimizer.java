@@ -131,6 +131,7 @@ public class Optimizer {
                                   ColumnRefFactory columnRefFactory) {
         prepare(connectContext, logicOperatorTree, columnRefFactory);
 
+        // 采用 RBO 或 CBO 对 LogicalPlan 进行优化，默认 CBO
         OptExpression result = optimizerConfig.isRuleBased() ?
                 optimizeByRule(connectContext, logicOperatorTree, requiredProperty, requiredColumns) :
                 optimizeByCost(connectContext, logicOperatorTree, requiredProperty, requiredColumns);
@@ -156,8 +157,8 @@ public class Optimizer {
                                          PhysicalPropertySet requiredProperty,
                                          ColumnRefSet requiredColumns) {
         OptimizerTraceUtil.logOptExpression(connectContext, "origin logicOperatorTree:\n%s", logicOperatorTree);
-        TaskContext rootTaskContext =
-                new TaskContext(context, requiredProperty, requiredColumns.clone(), Double.MAX_VALUE);
+        TaskContext rootTaskContext = new TaskContext(
+                context, requiredProperty, requiredColumns.clone(), Double.MAX_VALUE);
         logicOperatorTree = rewriteAndValidatePlan(connectContext, logicOperatorTree, rootTaskContext);
         OptimizerTraceUtil.log(connectContext, "after logical rewrite, new logicOperatorTree:\n%s", logicOperatorTree);
         return logicOperatorTree;
@@ -181,14 +182,16 @@ public class Optimizer {
         OptimizerTraceUtil.logOptExpression(connectContext, "origin logicOperatorTree:\n%s", logicOperatorTree);
         // Phase 2: rewrite based on memo and group
         Memo memo = context.getMemo();
-        TaskContext rootTaskContext =
-                new TaskContext(context, requiredProperty, requiredColumns.clone(), Double.MAX_VALUE);
+        TaskContext rootTaskContext = new TaskContext(
+                context, requiredProperty, requiredColumns.clone(), Double.MAX_VALUE);
 
         // collect all olap scan operator
         collectAllScanOperators(logicOperatorTree, rootTaskContext);
 
+        // 阶段一：基于 RBO 进行优化
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer.RuleBaseOptimize")) {
             logicOperatorTree = rewriteAndValidatePlan(connectContext, logicOperatorTree, rootTaskContext);
+            LOG.info("Optimized LogicalPlan after RBO:\n{}", logicOperatorTree.explain());
         }
 
         memo.init(logicOperatorTree);
@@ -203,6 +206,7 @@ public class Optimizer {
         memo.deriveAllGroupLogicalProperty();
 
         // Phase 3: optimize based on memo and group
+        // 阶段二：基于 CBO 进行优化
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer.CostBaseOptimize")) {
             memoOptimize(connectContext, memo, rootTaskContext);
         }
@@ -213,15 +217,18 @@ public class Optimizer {
             int nthExecPlan = connectContext.getSessionVariable().getUseNthExecPlan();
             result = EnumeratePlan.extractNthPlan(requiredProperty, memo.getRootGroup(), nthExecPlan);
         } else {
+            // 选择最优的执行计划
             result = extractBestPlan(requiredProperty, memo.getRootGroup());
         }
         OptimizerTraceUtil.logOptExpression(connectContext, "after extract best plan:\n%s", result);
+        LOG.info("Optimized LogicalPlan after CBO:\n{}", result.explain());
 
         // set costs audio log before physicalRuleRewrite
         // statistics won't set correctly after physicalRuleRewrite.
         // we need set plan costs before physical rewrite stage.
         final CostEstimate costs = Explain.buildCost(result);
-        connectContext.getAuditEventBuilder().setPlanCpuCosts(costs.getCpuCost())
+        connectContext.getAuditEventBuilder()
+                .setPlanCpuCosts(costs.getCpuCost())
                 .setPlanMemCosts(costs.getMemoryCost());
         OptExpression finalPlan;
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer.PhysicalRewrite")) {
@@ -230,6 +237,7 @@ public class Optimizer {
             OptimizerTraceUtil.log(connectContext, context.getTraceInfo());
         }
 
+        // 对 finalPlan 进行校验
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer.PlanValidate")) {
             // valid the final plan
             PlanValidator.getInstance().validatePlan(finalPlan, rootTaskContext);
@@ -241,7 +249,8 @@ public class Optimizer {
         }
     }
 
-    private void prepare(ConnectContext connectContext, OptExpression logicOperatorTree,
+    private void prepare(ConnectContext connectContext,
+                         OptExpression logicOperatorTree,
                          ColumnRefFactory columnRefFactory) {
         Memo memo = null;
         if (!optimizerConfig.isRuleBased()) {
@@ -344,7 +353,7 @@ public class Optimizer {
         deriveLogicalProperty(tree);
 
         ruleRewriteIterative(tree, rootTaskContext, new PruneEmptyWindowRule());
-        // @todo: resolve recursive optimization question:
+        // todo: resolve recursive optimization question:
         //  MergeAgg -> PruneColumn -> PruneEmptyWindow -> MergeAgg/Project -> PruneColumn...
         ruleRewriteIterative(tree, rootTaskContext, new MergeTwoAggRule());
 
@@ -485,6 +494,9 @@ public class Optimizer {
         return true;
     }
 
+    /**
+     * 基于 RBO 进行优化
+     */
     private OptExpression rewriteAndValidatePlan(ConnectContext connectContext,
                                                  OptExpression tree,
                                                  TaskContext rootTaskContext) {
@@ -556,10 +568,11 @@ public class Optimizer {
         OptExpression tree = memo.getRootGroup().extractLogicalTree();
         SessionVariable sessionVariable = connectContext.getSessionVariable();
         // add CboTablePruneRule
-        if (Utils.countJoinNodeSize(tree, CboTablePruneRule.JOIN_TYPES) < 10 &&
-                sessionVariable.isEnableCboTablePrune()) {
+        if (Utils.countJoinNodeSize(tree, CboTablePruneRule.JOIN_TYPES) < 10
+                && sessionVariable.isEnableCboTablePrune()) {
             context.getRuleSet().addCboTablePruneRule();
         }
+
         // Join reorder
         int innerCrossJoinNode = Utils.countJoinNodeSize(tree, JoinOperator.innerCrossJoinSet());
         if (!sessionVariable.isDisableJoinReorder() && innerCrossJoinNode < sessionVariable.getCboMaxReorderNode()) {

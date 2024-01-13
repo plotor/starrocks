@@ -73,8 +73,10 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
-/*
+/**
  * This class group tasks by backend
+ *
+ * 封装发送给指定 BE 的批量任务
  */
 public class AgentBatchTask implements Runnable {
     private static final Logger LOG = LogManager.getLogger(AgentBatchTask.class);
@@ -186,14 +188,16 @@ public class AgentBatchTask implements Runnable {
                 String host = computeNode.getHost();
                 int port = computeNode.getBePort();
 
+                // 获取发送给指定 BE 的 Task 集合
                 List<AgentTask> tasks = this.backendIdToTasks.get(backendId);
                 // create AgentClient
                 address = new TNetworkAddress(host, port);
                 client = ClientPool.backendPool.borrowObject(address);
-                List<TAgentTaskRequest> agentTaskRequests = new LinkedList<TAgentTaskRequest>();
+                List<TAgentTaskRequest> agentTaskRequests = new LinkedList<>();
                 for (AgentTask task : tasks) {
                     agentTaskRequests.add(toAgentTaskRequest(task));
                 }
+                // 将任务以 Thrift RPC 形式发送给对应的 BE 执行
                 client.submit_tasks(agentTaskRequests);
                 if (LOG.isDebugEnabled()) {
                     for (AgentTask task : tasks) {
@@ -225,6 +229,7 @@ public class AgentBatchTask implements Runnable {
         switch (taskType) {
             case CREATE: {
                 CreateReplicaTask createReplicaTask = (CreateReplicaTask) task;
+                // 序列化成 Thrift 请求对象
                 TCreateTabletReq request = createReplicaTask.toThrift();
                 if (LOG.isDebugEnabled()) {
                     LOG.debug(request.toString());

@@ -59,6 +59,7 @@ public class SRMetaBlockReader {
         this.numJsonRead = 0;
 
         String s = Text.readStringWithChecksum(checkedInputStream);
+        LOG.error("Meta header: {}", s);
         header = GsonUtils.GSON.fromJson(s, SRMetaBlockHeader.class);
     }
 
@@ -82,6 +83,7 @@ public class SRMetaBlockReader {
                     "Read json more than expect: %d >= %d", numJsonRead, header.getNumJson()));
         }
         String s = Text.readStringWithChecksum(checkedInputStream);
+        LOG.info("{}/{}, meta json: \n{}", numJsonRead, header.getNumJson(), s);
         numJsonRead += 1;
         return s;
     }

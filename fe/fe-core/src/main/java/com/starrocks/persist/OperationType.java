@@ -496,4 +496,5 @@ public class OperationType {
      * NOTICE: OperationType cannot use a value exceeding 20000, and an error will be reported if it exceeds
      */
     public static final short OP_TYPE_EOF = 20000;
+
 }

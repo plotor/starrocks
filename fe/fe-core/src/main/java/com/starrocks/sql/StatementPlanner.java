@@ -46,6 +46,8 @@ import com.starrocks.sql.optimizer.transformer.RelationTransformer;
 import com.starrocks.sql.plan.ExecPlan;
 import com.starrocks.sql.plan.PlanFragmentBuilder;
 import com.starrocks.thrift.TResultSinkType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -58,11 +60,20 @@ import static com.starrocks.sql.common.ErrorType.INTERNAL_ERROR;
 
 public class StatementPlanner {
 
+    private static final Logger log = LoggerFactory.getLogger(StatementPlanner.class);
+
     public static ExecPlan plan(StatementBase stmt, ConnectContext session) {
         return plan(stmt, session, TResultSinkType.MYSQL_PROTOCAL);
     }
 
-    public static ExecPlan plan(StatementBase stmt, ConnectContext session,
+    /**
+     * 1. 基于 AST 对 SQL 进行语义分析
+     * 2. 基于 AST 生成 LogicalPlan
+     * 3. 基于 RBO + CBO 对 LogicalPlan 进行优化，并生成最优的 PhysicalPlan
+     * 4. 将 PhysicalPlan 转换成可执行的 ExecPlan
+     */
+    public static ExecPlan plan(StatementBase stmt,
+                                ConnectContext session,
                                 TResultSinkType resultSinkType) {
         if (stmt instanceof QueryStatement) {
             OptimizerTraceUtil.logQueryStatement(session, "after parse:\n%s", (QueryStatement) stmt);
@@ -136,17 +147,18 @@ public class StatementPlanner {
                                             TResultSinkType resultSinkType) {
         QueryRelation query = (QueryRelation) relation;
         List<String> colNames = query.getColumnOutputNames();
-        // 1. Build Logical plan
+
+        // 1. Build Logical plan，生成逻辑执行计划
         ColumnRefFactory columnRefFactory = new ColumnRefFactory();
         LogicalPlan logicalPlan;
-
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Transformer")) {
             logicalPlan = new RelationTransformer(columnRefFactory, session).transformWithSelectLimit(query);
         }
 
+        // 2. Optimize logical plan and build physical plan
+        // 对逻辑执行计划进行 RBO + CBO 优化得到最优的物理执行计划
         OptExpression optimizedPlan;
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer")) {
-            // 2. Optimize logical plan and build physical plan
             Optimizer optimizer = new Optimizer();
             optimizedPlan = optimizer.optimize(
                     session,
@@ -155,27 +167,33 @@ public class StatementPlanner {
                     new ColumnRefSet(logicalPlan.getOutputColumn()),
                     columnRefFactory);
         }
+
+        // 3. Build fragment exec plan，生成 PlanFragment 物理执行计划
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("ExecPlanBuild")) {
-            // 3. Build fragment exec plan
             /*
              * SingleNodeExecPlan is set in TableQueryPlanAction to generate a single-node Plan,
              * currently only used in Spark/Flink Connector
              * Because the connector sends only simple queries, it only needs to remove the output fragment
              */
             return PlanFragmentBuilder.createPhysicalPlan(
-                    optimizedPlan, session, logicalPlan.getOutputColumn(), columnRefFactory, colNames,
+                    optimizedPlan,
+                    session,
+                    logicalPlan.getOutputColumn(),
+                    columnRefFactory,
+                    colNames,
                     resultSinkType,
-                    !session.getSessionVariable().isSingleNodeExecPlan());
+                    !session.getSessionVariable().isSingleNodeExecPlan()
+            );
         }
     }
 
     public static ExecPlan createQueryPlanWithReTry(QueryStatement queryStmt,
                                                     ConnectContext session,
                                                     TResultSinkType resultSinkType) {
+        String sql = queryStmt.getOrigStmt().originStmt;
         QueryRelation query = queryStmt.getQueryRelation();
         List<String> colNames = query.getColumnOutputNames();
 
-        // 1. Build Logical plan
         ColumnRefFactory columnRefFactory = new ColumnRefFactory();
         boolean isSchemaValid = true;
 
@@ -192,29 +210,37 @@ public class StatementPlanner {
                 colNames = queryStmt.getQueryRelation().getColumnOutputNames();
             }
 
+            // 1. Build Logical plan，生成逻辑执行计划
             LogicalPlan logicalPlan;
             try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Transformer")) {
                 logicalPlan = new RelationTransformer(columnRefFactory, session).transformWithSelectLimit(query);
+                log.info("SQL:\n{},\nLogicalPlan:\n{}", sql, logicalPlan.getRoot().explain());
             }
 
+            // 2. Optimize logical plan and build physical plan
+            // 对逻辑执行计划进行 RBO + CBO 优化得到最优的物理执行计划
             OptExpression optimizedPlan;
             try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer")) {
-                // 2. Optimize logical plan and build physical plan
                 Optimizer optimizer = new Optimizer();
                 // FIXME: refactor this into Optimizer.optimize() method.
                 // set query tables into OptimizeContext so can be added for mv rewrite
                 if (Config.skip_whole_phase_lock_mv_limit >= 0) {
                     optimizer.setQueryTables(olapTables);
                 }
+
+                // 默认基于 RBO + CBO 对 LogicalPlan 进行优化
                 optimizedPlan = optimizer.optimize(
                         session,
                         logicalPlan.getRoot(),
                         new PhysicalPropertySet(),
                         new ColumnRefSet(logicalPlan.getOutputColumn()),
-                        columnRefFactory);
+                        columnRefFactory
+                );
+                log.info("SQL:\n{},\nOptimized LogicalPlan:\n{}", sql, optimizedPlan.explain());
             }
+
+            // 3. Build fragment exec plan，生成 PlanFragment 物理执行计划
             try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("ExecPlanBuild")) {
-                // 3. Build fragment exec plan
                 /*
                  * SingleNodeExecPlan is set in TableQueryPlanAction to generate a single-node Plan,
                  * currently only used in Spark/Flink Connector
@@ -224,13 +250,19 @@ public class StatementPlanner {
                 // Because we need to ensure multi partition visible versions are consistent.
                 long buildFragmentStartTime = OptimisticVersion.generate();
                 ExecPlan plan = PlanFragmentBuilder.createPhysicalPlan(
-                        optimizedPlan, session, logicalPlan.getOutputColumn(), columnRefFactory, colNames,
+                        optimizedPlan,
+                        session,
+                        logicalPlan.getOutputColumn(),
+                        columnRefFactory,
+                        colNames,
                         resultSinkType,
                         !session.getSessionVariable().isSingleNodeExecPlan());
+                log.info("SQL:\n{},\nExecPlan:\n{}", sql, plan.getExplainString(StatementBase.ExplainLevel.VERBOSE));
                 isSchemaValid = olapTables.stream().noneMatch(t -> t.lastSchemaUpdateTime.get() > planStartTime);
                 isSchemaValid = isSchemaValid && olapTables.stream().allMatch(t ->
-                        t.lastVersionUpdateEndTime.get() < buildFragmentStartTime &&
-                                t.lastVersionUpdateEndTime.get() >= t.lastVersionUpdateStartTime.get());
+                        t.lastVersionUpdateEndTime.get() < buildFragmentStartTime
+                                && t.lastVersionUpdateEndTime.get() >= t.lastVersionUpdateStartTime.get()
+                );
                 if (isSchemaValid) {
                     return plan;
                 }
@@ -245,8 +277,8 @@ public class StatementPlanner {
                 }
             }
         }
-        Preconditions.checkState(false, "The tablet write operation update metadata " +
-                "take a long time");
+
+        Preconditions.checkState(false, "The tablet write operation update metadata take a long time");
         return null;
     }
 

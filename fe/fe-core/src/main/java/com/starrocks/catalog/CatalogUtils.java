@@ -324,6 +324,9 @@ public class CatalogUtils {
         return bucketNum;
     }
 
+    /**
+     * 按照策略自动设置 bucket num
+     */
     public static int calAvgBucketNumOfRecentPartitions(OlapTable olapTable, int recentPartitionNum,
                                                         boolean enableAutoTabletDistribution) {
         // 1. If the partition is less than recentPartitionNum, use backendNum to speculate the bucketNum
