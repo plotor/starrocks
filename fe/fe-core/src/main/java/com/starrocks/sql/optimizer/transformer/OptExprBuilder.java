@@ -27,8 +27,13 @@ import java.util.stream.Collectors;
  * OptExprBuilder is used to build OptExpression tree
  */
 public class OptExprBuilder {
+
+    /* 当前节点算子，分为 LogicalOperator 和 PhysicalOperator */
     private final Operator root;
+
+    /* 子节点算子，可以是 0 个，也可以是多个 */
     private final List<OptExprBuilder> inputs;
+
     private ExpressionMapping expressionMapping;
 
     public OptExprBuilder(Operator root, List<OptExprBuilder> inputs, ExpressionMapping expressionMapping) {
@@ -54,11 +59,14 @@ public class OptExprBuilder {
     }
 
     public OptExpression getRoot() {
-        if (inputs.size() > 0) {
-            return OptExpression
-                    .create(root, inputs.stream().map(OptExprBuilder::getRoot).collect(Collectors.toList()));
-        } else {
+        if (inputs.isEmpty()) {
             return new OptExpression(root);
+        } else {
+            return OptExpression
+                    .create(root, inputs.stream()
+                            .map(OptExprBuilder::getRoot)
+                            .collect(Collectors.toList())
+                    );
         }
     }
 

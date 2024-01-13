@@ -420,7 +420,13 @@ public class CoordinatorPreprocessor {
         resetFragmentState();
         prepareFragments();
 
+        // 计算 Scan 类型节点 Fragment 的执行实例
         computeScanRangeAssignment();
+        /*
+         * 1. 计算非 Scan 类型节点的 Fragment 的执行实例
+         * 2. 计算所有类型节点的实例个数
+         * 3. 构建 Fragment 执行实例之间的依赖关系
+         */
         computeFragmentExecParams();
         traceInstance();
         computeBeInstanceNumbers();
@@ -446,6 +452,7 @@ public class CoordinatorPreprocessor {
             fragmentExecParamsMap.put(fragment.getFragmentId(), new FragmentExecParams(fragment));
         }
 
+        // FE Thrift RPC 服务地址
         coordAddress = new TNetworkAddress(LOCAL_IP, Config.rpc_port);
 
         this.idToComputeNode = buildComputeNodeInfo();
@@ -455,9 +462,10 @@ public class CoordinatorPreprocessor {
             this.idToBackend = ImmutableMap.copyOf(GlobalStateMgr.getCurrentSystemInfo().getIdToBackend());
         }
 
-        //if it has compute node and contains hdfsScanNode,will use compute node,even though preferComputeNode is false
+        // if it has compute node and contains hdfsScanNode,
+        // will use compute node,even though preferComputeNode is false
         boolean preferComputeNode = connectContext.getSessionVariable().isPreferComputeNode();
-        if (idToComputeNode != null && idToComputeNode.size() > 0) {
+        if (idToComputeNode != null && !idToComputeNode.isEmpty()) {
             hasComputeNode = true;
             if (preferComputeNode || RunMode.getCurrentRunMode() == RunMode.SHARED_DATA) {
                 usedComputeNode = true;
@@ -807,7 +815,7 @@ public class CoordinatorPreprocessor {
                                     scanRangesPerDriverSeq.put(driverSeq, scanRangeParamsPerDriverSeq.get(driverSeq));
                                 }
                                 for (int driverSeq = scanRangeParamsPerDriverSeq.size();
-                                        driverSeq < instanceParam.pipelineDop; ++driverSeq) {
+                                     driverSeq < instanceParam.pipelineDop; ++driverSeq) {
                                     scanRangesPerDriverSeq.put(driverSeq, Lists.newArrayList());
                                 }
                             }
@@ -1136,23 +1144,34 @@ public class CoordinatorPreprocessor {
             if (scanNode instanceof SchemaScanNode) {
                 BackendSelector selector = new NormalBackendSelector(scanNode, locations, assignment);
                 selector.computeScanRangeAssignment();
-            } else if ((scanNode instanceof HdfsScanNode) || (scanNode instanceof IcebergScanNode) ||
-                    scanNode instanceof HudiScanNode || scanNode instanceof DeltaLakeScanNode ||
-                    scanNode instanceof FileTableScanNode || scanNode instanceof PaimonScanNode) {
-
-                HDFSBackendSelector selector =
-                        new HDFSBackendSelector(scanNode, locations, assignment, addressToBackendID, usedBackendIDs,
-                                getSelectorComputeNodes(hasComputeNode),
-                                hasComputeNode,
-                                sv.getForceScheduleLocal(),
-                                sv.getHDFSBackendSelectorScanRangeShuffle());
+            }
+            // 用于查询外表
+            else if (scanNode instanceof HdfsScanNode
+                    || scanNode instanceof IcebergScanNode
+                    || scanNode instanceof HudiScanNode
+                    || scanNode instanceof DeltaLakeScanNode
+                    || scanNode instanceof FileTableScanNode
+                    || scanNode instanceof PaimonScanNode) {
+                HDFSBackendSelector selector = new HDFSBackendSelector(
+                        scanNode,
+                        locations,
+                        assignment,
+                        addressToBackendID,
+                        usedBackendIDs,
+                        getSelectorComputeNodes(hasComputeNode),
+                        hasComputeNode,
+                        sv.getForceScheduleLocal(),
+                        sv.getHDFSBackendSelectorScanRangeShuffle()
+                );
                 selector.computeScanRangeAssignment();
             } else {
+                // Colocate Join
                 boolean hasColocate = isColocateFragment(scanNode.getFragment().getPlanRoot());
-                boolean hasBucket =
-                        isBucketShuffleJoin(scanNode.getFragmentId().asInt(), scanNode.getFragment().getPlanRoot());
+                // Bucket Shuffle Join
+                boolean hasBucket = isBucketShuffleJoin(
+                        scanNode.getFragmentId().asInt(), scanNode.getFragment().getPlanRoot());
                 boolean hasReplicated = isReplicatedFragment(scanNode.getFragment().getPlanRoot());
-                if (assignment.size() > 0 && hasReplicated && scanNode.canDoReplicatedJoin()) {
+                if (!assignment.isEmpty() && hasReplicated && scanNode.canDoReplicatedJoin()) {
                     BackendSelector selector = new ReplicatedBackendSelector(scanNode, locations, assignment);
                     selector.computeScanRangeAssignment();
                     replicateScanIds.add(scanNode.getId().asInt());
@@ -1173,19 +1192,21 @@ public class CoordinatorPreprocessor {
     @VisibleForTesting
     void computeFragmentExecParams() throws Exception {
         // fill hosts field in fragmentExecParams
+        // 计算非 Scan 类型 Fragment 的执行实例位置
+        // 计算 Scan 和非 Scan 类型 Fragment 的实例个数
         computeFragmentHosts();
 
         // assign instance ids
         instanceIds.clear();
         for (FragmentExecParams params : fragmentExecParamsMap.values()) {
             if (LOG.isDebugEnabled()) {
-                LOG.debug("fragment {} has instances {}", params.fragment.getFragmentId(),
-                        params.instanceExecParams.size());
+                LOG.debug("fragment {} has instances {}",
+                        params.fragment.getFragmentId(), params.instanceExecParams.size());
             }
 
             if (params.fragment.getSink() instanceof ResultSink && params.instanceExecParams.size() > 1) {
-                throw new StarRocksPlannerException("This sql plan has multi result sinks",
-                        ErrorType.INTERNAL_ERROR);
+                throw new StarRocksPlannerException(
+                        "This sql plan has multi result sinks", ErrorType.INTERNAL_ERROR);
             }
 
             for (int j = 0; j < params.instanceExecParams.size(); ++j) {
@@ -1204,6 +1225,8 @@ public class CoordinatorPreprocessor {
 
         // MultiCastFragment params
         handleMultiCastFragmentParams();
+
+        /* 构建 Fragment 之间的依赖关系 */
 
         for (FragmentExecParams params : fragmentExecParamsMap.values()) {
             if (params.fragment instanceof MultiCastPlanFragment) {
@@ -1238,8 +1261,10 @@ public class CoordinatorPreprocessor {
                 // we might have multiple fragments sending to this exchange node
                 // (distributed MERGE), which is why we need to add up the #senders
                 // e.g. sort-merge
-                destParams.perExchNumSenders.put(exchId.asInt(),
-                        params.instanceExecParams.size() + destParams.perExchNumSenders.get(exchId.asInt()));
+                destParams.perExchNumSenders.put(
+                        exchId.asInt(),
+                        params.instanceExecParams.size() + destParams.perExchNumSenders.get(exchId.asInt())
+                );
             }
 
             if (needScheduleByShuffleJoin(destFragment.getFragmentId().asInt(), sink)) {
@@ -2080,14 +2105,11 @@ public class CoordinatorPreprocessor {
             // sort the scan ranges by row count
             // only sort the scan range when it is load job
             // but when there are too many scan ranges, we will not sort them since performance issue
-            if (locations.size() < 10240 && locations.size() > 0 && isEnableScheduleByRowCnt(locations.get(0))) {
-                locations.sort(new Comparator<TScanRangeLocations>() {
-                    @Override
-                    public int compare(TScanRangeLocations l, TScanRangeLocations r) {
-                        return Long.compare(r.getScan_range().getInternal_scan_range().getRow_count(),
-                                l.getScan_range().getInternal_scan_range().getRow_count());
-                    }
-                });
+            if (locations.size() < 10240 && !locations.isEmpty() && isEnableScheduleByRowCnt(locations.get(0))) {
+                locations.sort((l, r) -> Long.compare(
+                        r.getScan_range().getInternal_scan_range().getRow_count(),
+                        l.getScan_range().getInternal_scan_range().getRow_count())
+                );
             }
             for (TScanRangeLocations scanRangeLocations : locations) {
                 // assign this scan range to the host w/ the fewest assigned row count
@@ -2106,21 +2128,26 @@ public class CoordinatorPreprocessor {
 
                 // only enable for load now, The insert into select performance problem caused by data skew is the most serious
                 if (isEnableScheduleByRowCnt(scanRangeLocations)) {
-                    assignedRowCountPerHost.put(minLocation.server, assignedRowCountPerHost.get(minLocation.server)
-                            + scanRangeLocations.getScan_range().getInternal_scan_range().getRow_count());
+                    assignedRowCountPerHost.put(
+                            minLocation.server,
+                            assignedRowCountPerHost.get(minLocation.server) +
+                                    scanRangeLocations.getScan_range().getInternal_scan_range().getRow_count()
+                    );
                 } else {
                     // use tablet num as assigned row count
-                    assignedRowCountPerHost.put(minLocation.server, assignedRowCountPerHost.get(minLocation.server) + 1);
+                    assignedRowCountPerHost.put(
+                            minLocation.server,
+                            assignedRowCountPerHost.get(minLocation.server) + 1
+                    );
                 }
 
                 Reference<Long> backendIdRef = new Reference<>();
-                TNetworkAddress execHostPort = SimpleScheduler.getHost(minLocation.backend_id,
-                        scanRangeLocations.getLocations(),
-                        idToBackend, backendIdRef);
+                TNetworkAddress execHostPort = SimpleScheduler.getHost(
+                        minLocation.backend_id, scanRangeLocations.getLocations(), idToBackend, backendIdRef
+                );
 
                 if (execHostPort == null) {
-                    throw new UserException(FeConstants.BACKEND_NODE_NOT_FOUND_ERROR
-                            + backendInfosString(false));
+                    throw new UserException(FeConstants.BACKEND_NODE_NOT_FOUND_ERROR + backendInfosString(false));
                 }
                 recordUsedBackend(execHostPort, backendIdRef.getRef());
 

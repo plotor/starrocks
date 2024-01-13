@@ -108,13 +108,21 @@ public class SelectRelation extends QueryRelation {
         this.having = having;
     }
 
-    public SelectRelation(List<Expr> outputExpr, boolean isDistinct,
-                          Scope orderScope, List<Expr> orderSourceExpressions,
-                          Relation relation, Expr predicate, LimitElement limit,
-                          List<Expr> groupBy, List<FunctionCallExpr> aggregate, List<List<Expr>> groupingSetsList,
+    public SelectRelation(List<Expr> outputExpr,
+                          boolean isDistinct,
+                          Scope orderScope,
+                          List<Expr> orderSourceExpressions,
+                          Relation relation,
+                          Expr predicate,
+                          LimitElement limit,
+                          List<Expr> groupBy,
+                          List<FunctionCallExpr> aggregate,
+                          List<List<Expr>> groupingSetsList,
                           List<Expr> groupingFunctionCallExprs,
-                          List<OrderByElement> orderBy, Expr having,
-                          List<AnalyticExpr> outputAnalytic, List<AnalyticExpr> orderByAnalytic,
+                          List<OrderByElement> orderBy,
+                          Expr having,
+                          List<AnalyticExpr> outputAnalytic,
+                          List<AnalyticExpr> orderByAnalytic,
                           Map<Expr, FieldId> columnReferences) {
         this.outputExpr = outputExpr;
         this.isDistinct = isDistinct;

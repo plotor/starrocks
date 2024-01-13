@@ -63,6 +63,12 @@ import java.util.stream.Collectors;
  * EnforceAndCostTask implementation inspire by Cascades paper and CMU noisepage project
  */
 public class EnforceAndCostTask extends OptimizerTask implements Cloneable {
+
+    /*
+     * Enforce 的主要目的在于，在探索分布式计划时，计划中某些特殊的执行节点需要特定的数据分布/顺序，
+     * 我们需要将这些有特殊需求的节点标识出来，并增加 exchange/sort 节点，让数据在分布式环境中能够满足上层节点的要求。
+     */
+
     private final GroupExpression groupExpression;
     // multi required PropertySets for children
     private List<List<PhysicalPropertySet>> childrenRequiredPropertiesList;

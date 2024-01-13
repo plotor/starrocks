@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 public abstract class QueryRelation extends Relation {
+
     protected List<OrderByElement> sortClause;
     protected LimitElement limit;
     private final List<CTERelation> cteRelations = new ArrayList<>();

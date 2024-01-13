@@ -86,6 +86,7 @@ import com.starrocks.sql.optimizer.task.TaskContext;
 import com.starrocks.sql.optimizer.validate.MVRewriteValidator;
 import com.starrocks.sql.optimizer.validate.OptExpressionValidator;
 import com.starrocks.sql.optimizer.validate.PlanValidator;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -129,8 +130,10 @@ public class Optimizer {
                                   PhysicalPropertySet requiredProperty,
                                   ColumnRefSet requiredColumns,
                                   ColumnRefFactory columnRefFactory) {
+        // 执行一些初始化，以及物化视图改写准备工作
         prepare(connectContext, logicOperatorTree, columnRefFactory);
 
+        // 采用 RBO 或 CBO 对 LogicalPlan 进行优化，默认 CBO
         OptExpression result = optimizerConfig.isRuleBased() ?
                 optimizeByRule(connectContext, logicOperatorTree, requiredProperty, requiredColumns) :
                 optimizeByCost(connectContext, logicOperatorTree, requiredProperty, requiredColumns);
@@ -156,8 +159,8 @@ public class Optimizer {
                                          PhysicalPropertySet requiredProperty,
                                          ColumnRefSet requiredColumns) {
         OptimizerTraceUtil.logOptExpression(connectContext, "origin logicOperatorTree:\n%s", logicOperatorTree);
-        TaskContext rootTaskContext =
-                new TaskContext(context, requiredProperty, requiredColumns.clone(), Double.MAX_VALUE);
+        TaskContext rootTaskContext = new TaskContext(
+                context, requiredProperty, requiredColumns.clone(), Double.MAX_VALUE);
         logicOperatorTree = rewriteAndValidatePlan(connectContext, logicOperatorTree, rootTaskContext);
         OptimizerTraceUtil.log(connectContext, "after logical rewrite, new logicOperatorTree:\n%s", logicOperatorTree);
         return logicOperatorTree;
@@ -179,18 +182,23 @@ public class Optimizer {
                                          ColumnRefSet requiredColumns) {
         // Phase 1: none
         OptimizerTraceUtil.logOptExpression(connectContext, "origin logicOperatorTree:\n%s", logicOperatorTree);
+
         // Phase 2: rewrite based on memo and group
         Memo memo = context.getMemo();
-        TaskContext rootTaskContext =
-                new TaskContext(context, requiredProperty, requiredColumns.clone(), Double.MAX_VALUE);
+        TaskContext rootTaskContext = new TaskContext(
+                context, requiredProperty, requiredColumns.clone(), Double.MAX_VALUE);
 
         // collect all olap scan operator
+        // 获取查询包含的所有 LogicalOlapScanOperator 算子，记录到上下文中
         collectAllScanOperators(logicOperatorTree, rootTaskContext);
 
+        // 阶段一：基于 RBO 进行优化
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer.RuleBaseOptimize")) {
             logicOperatorTree = rewriteAndValidatePlan(connectContext, logicOperatorTree, rootTaskContext);
+            LOG.info("Optimized LogicalPlan after RBO:\n{}", logicOperatorTree.explain());
         }
 
+        // 初始化 Optimizer 搜索空间
         memo.init(logicOperatorTree);
         OptimizerTraceUtil.log(connectContext, "after logical rewrite, root group:\n%s", memo.getRootGroup());
 
@@ -203,6 +211,7 @@ public class Optimizer {
         memo.deriveAllGroupLogicalProperty();
 
         // Phase 3: optimize based on memo and group
+        // 阶段二：基于 CBO 进行优化
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer.CostBaseOptimize")) {
             memoOptimize(connectContext, memo, rootTaskContext);
         }
@@ -213,23 +222,28 @@ public class Optimizer {
             int nthExecPlan = connectContext.getSessionVariable().getUseNthExecPlan();
             result = EnumeratePlan.extractNthPlan(requiredProperty, memo.getRootGroup(), nthExecPlan);
         } else {
+            // 选择最优的执行计划
             result = extractBestPlan(requiredProperty, memo.getRootGroup());
         }
         OptimizerTraceUtil.logOptExpression(connectContext, "after extract best plan:\n%s", result);
+        LOG.info("Optimized LogicalPlan after CBO:\n{}", result.explain());
 
         // set costs audio log before physicalRuleRewrite
         // statistics won't set correctly after physicalRuleRewrite.
         // we need set plan costs before physical rewrite stage.
         final CostEstimate costs = Explain.buildCost(result);
-        connectContext.getAuditEventBuilder().setPlanCpuCosts(costs.getCpuCost())
+        connectContext.getAuditEventBuilder()
+                .setPlanCpuCosts(costs.getCpuCost())
                 .setPlanMemCosts(costs.getMemoryCost());
         OptExpression finalPlan;
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer.PhysicalRewrite")) {
+            // 基于启发式规则对物理执行计划进行优化
             finalPlan = physicalRuleRewrite(rootTaskContext, result);
             OptimizerTraceUtil.logOptExpression(connectContext, "final plan after physical rewrite:\n%s", finalPlan);
             OptimizerTraceUtil.log(connectContext, context.getTraceInfo());
         }
 
+        // 对 finalPlan 进行校验
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer.PlanValidate")) {
             // valid the final plan
             PlanValidator.getInstance().validatePlan(finalPlan, rootTaskContext);
@@ -241,7 +255,8 @@ public class Optimizer {
         }
     }
 
-    private void prepare(ConnectContext connectContext, OptExpression logicOperatorTree,
+    private void prepare(ConnectContext connectContext,
+                         OptExpression logicOperatorTree,
                          ColumnRefFactory columnRefFactory) {
         Memo memo = null;
         if (!optimizerConfig.isRuleBased()) {
@@ -253,8 +268,8 @@ public class Optimizer {
         if (connectContext.getExecutor() == null) {
             traceInfo = new OptimizerTraceInfo(connectContext.getQueryId(), null);
         } else {
-            traceInfo =
-                    new OptimizerTraceInfo(connectContext.getQueryId(), connectContext.getExecutor().getParsedStmt());
+            traceInfo = new OptimizerTraceInfo(
+                    connectContext.getQueryId(), connectContext.getExecutor().getParsedStmt());
         }
         context.setTraceInfo(traceInfo);
         context.setUpdateTableId(updateTableId);
@@ -263,7 +278,7 @@ public class Optimizer {
         // prepare related mvs if needed
         new MvRewritePreprocessor(connectContext, columnRefFactory, context, logicOperatorTree)
                 .prepare(logicOperatorTree);
-        if (context.getCandidateMvs() != null && !context.getCandidateMvs().isEmpty()) {
+        if (CollectionUtils.isNotEmpty(context.getCandidateMvs())) {
             context.setQueryMaterializationContext(new QueryMaterializationContext());
         }
     }
@@ -306,8 +321,10 @@ public class Optimizer {
     private OptExpression logicalRuleRewrite(ConnectContext connectContext,
                                              OptExpression tree,
                                              TaskContext rootTaskContext) {
+        // 添加一个锚定的根节点
         tree = OptExpression.create(new LogicalTreeAnchorOperator(), tree);
         ColumnRefSet requiredColumns = rootTaskContext.getRequiredColumns().clone();
+        // 递归解析 LogicalProperty
         deriveLogicalProperty(tree);
 
         SessionVariable sessionVariable = rootTaskContext.getOptimizerContext().getSessionVariable();
@@ -344,7 +361,7 @@ public class Optimizer {
         deriveLogicalProperty(tree);
 
         ruleRewriteIterative(tree, rootTaskContext, new PruneEmptyWindowRule());
-        // @todo: resolve recursive optimization question:
+        // todo: resolve recursive optimization question:
         //  MergeAgg -> PruneColumn -> PruneEmptyWindow -> MergeAgg/Project -> PruneColumn...
         ruleRewriteIterative(tree, rootTaskContext, new MergeTwoAggRule());
 
@@ -485,16 +502,23 @@ public class Optimizer {
         return true;
     }
 
+    /**
+     * 基于 RBO 进行优化
+     */
     private OptExpression rewriteAndValidatePlan(ConnectContext connectContext,
                                                  OptExpression tree,
                                                  TaskContext rootTaskContext) {
+        // 基于 RBO 对查询进行优化改写
         OptExpression result = logicalRuleRewrite(connectContext, tree, rootTaskContext);
+
+        // 基于 Antlr Visitor 对优化得到的执行计划进行校验
         OptExpressionValidator validator = new OptExpressionValidator();
         validator.validate(result);
         return result;
     }
 
-    private OptExpression pushDownAggregation(OptExpression tree, TaskContext rootTaskContext,
+    private OptExpression pushDownAggregation(OptExpression tree,
+                                              TaskContext rootTaskContext,
                                               ColumnRefSet requiredColumns) {
         boolean pushDistinctFlag = false;
         boolean pushAggFlag = false;
@@ -555,14 +579,19 @@ public class Optimizer {
         context.setInMemoPhase(true);
         OptExpression tree = memo.getRootGroup().extractLogicalTree();
         SessionVariable sessionVariable = connectContext.getSessionVariable();
+
+        /* 按规则添加一系列 CBO 优化规则 */
+
         // add CboTablePruneRule
-        if (Utils.countJoinNodeSize(tree, CboTablePruneRule.JOIN_TYPES) < 10 &&
-                sessionVariable.isEnableCboTablePrune()) {
+        if (Utils.countJoinNodeSize(tree, CboTablePruneRule.JOIN_TYPES) < 10
+                && sessionVariable.isEnableCboTablePrune()) {
             context.getRuleSet().addCboTablePruneRule();
         }
+
         // Join reorder
         int innerCrossJoinNode = Utils.countJoinNodeSize(tree, JoinOperator.innerCrossJoinSet());
-        if (!sessionVariable.isDisableJoinReorder() && innerCrossJoinNode < sessionVariable.getCboMaxReorderNode()) {
+        if (!sessionVariable.isDisableJoinReorder()
+                && innerCrossJoinNode < sessionVariable.getCboMaxReorderNode()) {
             if (innerCrossJoinNode > sessionVariable.getCboMaxReorderNodeUseExhaustive()) {
                 CTEUtils.collectForceCteStatistics(memo, context);
 
@@ -572,15 +601,16 @@ public class Optimizer {
 
                 context.getRuleSet().addJoinCommutativityWithoutInnerRule();
             } else {
-                if (Utils.countJoinNodeSize(tree, JoinOperator.semiAntiJoinSet()) <
-                        sessionVariable.getCboMaxReorderNodeUseExhaustive()) {
+                if (Utils.countJoinNodeSize(tree, JoinOperator.semiAntiJoinSet())
+                        < sessionVariable.getCboMaxReorderNodeUseExhaustive()) {
                     context.getRuleSet().getTransformRules().add(JoinLeftAsscomRule.INNER_JOIN_LEFT_ASSCOM_RULE);
                 }
                 context.getRuleSet().addJoinTransformationRules();
             }
         }
 
-        if (!sessionVariable.isDisableJoinReorder() && sessionVariable.isEnableOuterJoinReorder()
+        if (!sessionVariable.isDisableJoinReorder()
+                && sessionVariable.isEnableOuterJoinReorder()
                 && Utils.capableOuterReorder(tree, sessionVariable.getCboReorderThresholdUseExhaustive())) {
             context.getRuleSet().addOuterJoinTransformationRules();
         }
@@ -602,13 +632,15 @@ public class Optimizer {
         }
 
         if (isEnableMultiTableRewrite(connectContext, tree)) {
-            if (sessionVariable.isEnableMaterializedViewViewDeltaRewrite() &&
-                    rootTaskContext.getOptimizerContext().getCandidateMvs()
-                            .stream().anyMatch(MaterializationContext::hasMultiTables)) {
+            if (sessionVariable.isEnableMaterializedViewViewDeltaRewrite()
+                    && rootTaskContext.getOptimizerContext().getCandidateMvs()
+                    .stream().anyMatch(MaterializationContext::hasMultiTables)) {
                 context.getRuleSet().addSingleTableMvRewriteRule();
             }
             context.getRuleSet().addMultiTableMvRewriteRule();
         }
+
+        /* 添加一个 OptimizeGroupTask 优化任务，并迭代执行 */
 
         context.getTaskScheduler().pushTask(new OptimizeGroupTask(rootTaskContext, memo.getRootGroup()));
         context.getTaskScheduler().executeTasks(rootTaskContext);
@@ -681,8 +713,8 @@ public class Optimizer {
             String msg = "no executable plan for this sql. group: %s. required property: %s";
             throw new IllegalArgumentException(String.format(msg, rootGroup, requiredProperty));
         }
-        List<PhysicalPropertySet> inputProperties = groupExpression.getInputProperties(requiredProperty);
 
+        List<PhysicalPropertySet> inputProperties = groupExpression.getInputProperties(requiredProperty);
         List<OptExpression> childPlans = Lists.newArrayList();
         for (int i = 0; i < groupExpression.arity(); ++i) {
             OptExpression childPlan = extractBestPlan(inputProperties.get(i), groupExpression.inputAt(i));
@@ -709,10 +741,14 @@ public class Optimizer {
     }
 
     private void ruleRewriteIterative(OptExpression tree, TaskContext rootTaskContext, RuleSetType ruleSetType) {
+        // 检查对应的规则是否已经被禁用
         if (optimizerConfig.isRuleSetTypeDisable(ruleSetType)) {
             return;
         }
+
+        // 获取对应类型的规则集合
         List<Rule> rules = rootTaskContext.getOptimizerContext().getRuleSet().getRewriteRulesByType(ruleSetType);
+        // 添加一个 RewriteTreeTask 优化任务，并迭代执行
         context.getTaskScheduler().pushTask(new RewriteTreeTask(rootTaskContext, tree, rules, false));
         context.getTaskScheduler().executeTasks(rootTaskContext);
     }

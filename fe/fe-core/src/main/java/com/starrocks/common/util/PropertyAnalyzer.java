@@ -101,7 +101,9 @@ public class PropertyAnalyzer {
     // for restore
     public static final String PROPERTIES_SCHEMA_VERSION = "schema_version";
 
+    // 配置布隆过滤器索引列
     public static final String PROPERTIES_BF_COLUMNS = "bloom_filter_columns";
+    // 配置布隆过滤器的误识别率
     public static final String PROPERTIES_BF_FPP = "bloom_filter_fpp";
     private static final double MAX_FPP = 0.05;
     private static final double MIN_FPP = 0.0001;

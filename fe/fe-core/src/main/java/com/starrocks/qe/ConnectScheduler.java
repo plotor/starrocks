@@ -225,6 +225,7 @@ public class ConnectScheduler {
                 }
 
                 context.setStartTime();
+                // 连接处理器
                 ConnectProcessor processor = new ConnectProcessor(context);
                 processor.loop();
             } catch (Exception e) {

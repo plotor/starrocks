@@ -48,7 +48,7 @@ public class JournalWriter {
     // store journal tasks of this batch
     protected List<JournalTask> currentBatchTasks = new ArrayList<>();
     // current journal task
-    private JournalTask currentJournal;
+    private JournalTask currentJournalTask;
     // batch start time
     private long startTimeNano;
     // batch size in bytes
@@ -101,48 +101,57 @@ public class JournalWriter {
 
     protected void writeOneBatch() throws InterruptedException {
         // waiting if necessary until an element becomes available
-        currentJournal = journalQueue.take();
+        currentJournalTask = journalQueue.take();
         long nextJournalId = nextVisibleJournalId;
+        // 清空状态
         initBatch();
 
         try {
+            // 开启事务
             this.journal.batchWriteBegin();
 
             while (true) {
-                journal.batchWriteAppend(nextJournalId, currentJournal.getBuffer());
-                currentBatchTasks.add(currentJournal);
+                // 写入数据
+                journal.batchWriteAppend(nextJournalId, currentJournalTask.getBuffer());
+                // 记录当前已经处理的 JournalTask
+                currentBatchTasks.add(currentJournalTask);
                 nextJournalId += 1;
 
+                // 如果应该执行 commit 则退出循环
                 if (shouldCommitNow()) {
                     break;
                 }
 
-                currentJournal = journalQueue.take();
+                currentJournalTask = journalQueue.take();
             }
         } catch (JournalException e) {
             // abort current task
-            LOG.warn("failed to write batch, will abort current journal {} and commit", currentJournal, e);
-            abortJournalTask(currentJournal, e.getMessage());
+            LOG.warn("failed to write batch, will abort current journal {} and commit", currentJournalTask, e);
+            abortJournalTask(currentJournalTask, e.getMessage());
         } finally {
             try {
-                // commit
+                // commit，提交事务
                 journal.batchWriteCommit();
-                LOG.debug("batch write commit success, from {} - {}", nextVisibleJournalId, nextJournalId);
+                LOG.info("Batch write commit success, from {} - {}", nextVisibleJournalId, nextJournalId);
                 nextVisibleJournalId = nextJournalId;
+                // 标识对应的 JournalTask 已被成功处理，这一步会让 EditLog 写操作从 BLOCK 中继续往下执行
                 markCurrentBatchSucceed();
             } catch (JournalException e) {
                 // abort
                 LOG.warn("failed to commit batch, will abort current {} journals.",
                         currentBatchTasks.size(), e);
                 try {
+                    // 回滚事务
                     journal.batchWriteAbort();
                 } catch (JournalException e2) {
                     LOG.warn("failed to abort batch, will ignore and continue.", e);
                 }
+                // 标识对应的 JournalTask 已被处理
                 abortCurrentBatch(e.getMessage());
             }
         }
 
+        // 判断是否需要新开一个 DB，默认每 50000 条日志新开一个 DB，对应一个 checkpoint 点
         rollJournalAfterBatch();
 
         updateBatchMetrics();
@@ -180,15 +189,15 @@ public class JournalWriter {
 
     private boolean shouldCommitNow() {
         // 1. check if is an emergency journal
-        if (currentJournal.getBetterCommitBeforeTimeInNano() > 0) {
-            long delayNanos = System.nanoTime() - currentJournal.getBetterCommitBeforeTimeInNano();
+        if (currentJournalTask.getBetterCommitBeforeTimeInNano() > 0) {
+            long delayNanos = System.nanoTime() - currentJournalTask.getBetterCommitBeforeTimeInNano();
             if (delayNanos >= 0) {
                 long logTime = System.currentTimeMillis();
                 // avoid logging too many messages if triggered frequently
                 if (lastLogTimeForDelayTriggeredCommit + 500 < logTime) {
                     lastLogTimeForDelayTriggeredCommit = logTime;
                     LOG.warn("journal expect commit before {} is delayed {} nanos, will commit now",
-                            currentJournal.getBetterCommitBeforeTimeInNano(), delayNanos);
+                            currentJournalTask.getBetterCommitBeforeTimeInNano(), delayNanos);
                 }
                 return true;
             }
@@ -202,7 +211,7 @@ public class JournalWriter {
         }
 
         // 3. check uncommitted journals by size
-        uncommittedEstimatedBytes += currentJournal.estimatedSizeByte();
+        uncommittedEstimatedBytes += currentJournalTask.estimatedSizeByte();
         if (uncommittedEstimatedBytes >= (long) Config.metadata_journal_max_batch_size_mb * 1024 * 1024) {
             LOG.warn("uncommitted estimated bytes {} >= {}MB, will commit now",
                     uncommittedEstimatedBytes, Config.metadata_journal_max_batch_size_mb);

@@ -38,7 +38,7 @@ import com.starrocks.server.GlobalStateMgr;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-/*
+/**
  * FrontendDaemon will wait for FE to be ready before running.
  */
 public class FrontendDaemon extends Daemon {

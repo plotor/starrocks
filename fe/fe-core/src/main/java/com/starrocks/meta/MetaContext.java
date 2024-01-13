@@ -34,7 +34,7 @@
 
 package com.starrocks.meta;
 
-/*
+/**
  * MetaContext saved the current meta version.
  * And we need to create a thread local meta context for all threads which are about to reading meta.
  */
@@ -42,7 +42,7 @@ public class MetaContext {
 
     private int starrocksMetaVersion;
 
-    private static ThreadLocal<MetaContext> threadLocalInfo = new ThreadLocal<MetaContext>();
+    private static ThreadLocal<MetaContext> threadLocalInfo = new ThreadLocal<>();
 
     public MetaContext() {
 

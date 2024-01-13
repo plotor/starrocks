@@ -859,22 +859,24 @@ public class AlterJobMgr {
         }
 
         // check conflict alter ops first
+        // 一个请求可能对于多个 ALTER Clause，需要检查这些 Clause 之间是否存在冲突；
         List<AlterClause> alterClauses = stmt.getOps();
         AlterOperations currentAlterOps = new AlterOperations();
         currentAlterOps.checkConflict(alterClauses);
 
         // check cluster capacity and db quota, only need to check once.
+        // 检查当前集群磁盘剩余量、租户 Quota 信息等
         if (currentAlterOps.needCheckCapacity()) {
             GlobalStateMgr.getCurrentSystemInfo().checkClusterCapacity();
             db.checkQuota();
         }
 
-        // some operations will take long time to process, need to be done outside the databse lock
+        // some operations will take long time to process, need to be done outside the database lock
         boolean needProcessOutsideDatabaseLock = false;
         String tableName = dbTableName.getTbl();
 
         boolean isSynchronous = true;
-        db.writeLock();
+        db.writeLock(); // 获取 DB 写锁
         OlapTable olapTable;
         try {
             Table table = db.getTable(tableName);
@@ -887,6 +889,7 @@ public class AlterJobMgr {
             }
             olapTable = (OlapTable) table;
 
+            // 获取当前 Table 的状态，对于同一张表而言同一时间只允许执行 1 个 Alter 任务
             if (olapTable.getState() != OlapTableState.NORMAL) {
                 throw InvalidOlapTableStateException.of(olapTable.getState(), olapTable.getName());
             }
@@ -963,7 +966,7 @@ public class AlterJobMgr {
                 throw new DdlException("Invalid alter operations: " + currentAlterOps);
             }
         } finally {
-            db.writeUnlock();
+            db.writeUnlock(); // 释放 DB 写锁
         }
 
         // the following ops should done outside db lock. because it contain synchronized create operation

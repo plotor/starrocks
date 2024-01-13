@@ -38,7 +38,9 @@ import java.util.List;
  */
 public class OptExpression {
 
+    /* 树当前节点 */
     private Operator op;
+    /* 当前节点的子节点，可以是 0 个，也可以是多个 */
     private List<OptExpression> inputs;
 
     private LogicalProperty property;

@@ -16,6 +16,9 @@
 package com.starrocks.ha;
 
 public interface StateChangeExecution {
-    public void transferToLeader();
-    public void transferToNonLeader(FrontendNodeType newType);
+
+    void transferToLeader();
+
+    void transferToNonLeader(FrontendNodeType newType);
+
 }

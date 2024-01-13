@@ -83,10 +83,13 @@ public class Checkpoint extends FrontendDaemon {
 
     @Override
     protected void runAfterCatalogReady() {
+        // 对应最新的 image 文件的 ID
         long imageVersion = 0;
+        // 获取处于 inactive 状态的最新的 BDB JournalId
         long checkpointVersion = 0;
-        Storage storage = null;
+        Storage storage;
         try {
+            // 加载 VERSION、ROLE 元数据文件，并获取最新的 image 文件 imageJournalId
             storage = new Storage(imageDir);
             // get max image version
             imageVersion = storage.getImageJournalId();
@@ -94,6 +97,7 @@ public class Checkpoint extends FrontendDaemon {
             checkpointVersion = journal.getFinalizedJournalId();
             LOG.info("checkpoint imageVersion {}, checkpointVersion {}", imageVersion, checkpointVersion);
             if (imageVersion >= checkpointVersion) {
+                // 已经完成 checkpoint，无需再 checkpoint
                 return;
             }
         } catch (IOException e) {
@@ -102,9 +106,17 @@ public class Checkpoint extends FrontendDaemon {
         }
 
         boolean success = false;
+        // 存算一体
         if (belongToGlobalStateMgr) {
+            /*
+             * 1. 加载本地最新的 image 文件
+             * 2. 重放元数据操作日志
+             * 3. 生成新的 image 文件到本地
+             */
             success = replayAndGenerateGlobalStateMgrImage(checkpointVersion);
-        } else {
+        }
+        // 存算分离
+        else {
             success = replayAndGenerateStarMgrImage(checkpointVersion);
         }
 
@@ -132,6 +144,7 @@ public class Checkpoint extends FrontendDaemon {
                 LOG.info("Put image:{}", url);
 
                 try {
+                    // 通知目标节点下载对应的 image 文件，并等待完成
                     MetaHelper.getRemoteFile(url, PUT_TIMEOUT_SECOND * 1000, new NullOutputStream());
                     successPushed++;
                 } catch (IOException e) {
@@ -186,6 +199,7 @@ public class Checkpoint extends FrontendDaemon {
                 }
                 deleteVersion = Math.min(minOtherNodesJournalId, checkpointVersion);
             }
+            // 删除已经 checkpoint 的元数据日志
             journal.deleteJournals(deleteVersion + 1);
             if (MetricRepo.hasInit) {
                 MetricRepo.COUNTER_IMAGE_PUSH.increase(1L);
@@ -194,7 +208,7 @@ public class Checkpoint extends FrontendDaemon {
                     deleteVersion, journal.getPrefix(), checkpointVersion, minOtherNodesJournalId);
         }
 
-        // Delete old image files
+        // Delete old image files，删除已经同步给对应 Follower 的 image 文件
         MetaCleaner cleaner = new MetaCleaner(imageDir);
         try {
             cleaner.clean();
@@ -203,7 +217,8 @@ public class Checkpoint extends FrontendDaemon {
         }
     }
 
-    private boolean replayAndGenerateGlobalStateMgrImage(long checkPointVersion) {
+    private boolean replayAndGenerateGlobalStateMgrImage(
+            long checkPointVersion /* 可以 checkpoint 的最大的 BDB journal ID*/) {
         assert belongToGlobalStateMgr == true;
         long replayedJournalId = -1;
         // generate new image file
@@ -211,9 +226,13 @@ public class Checkpoint extends FrontendDaemon {
         globalStateMgr = GlobalStateMgr.getCurrentState();
         globalStateMgr.setJournal(journal);
         try {
+            // 加载本地最新的 image 文件
             globalStateMgr.loadImage(imageDir);
+            // 重放未 checkpoint 的元数据日志
             globalStateMgr.replayJournal(checkPointVersion);
+            // 移除过期的任务
             globalStateMgr.clearExpiredJobs();
+            // 生成新的 image 文件，并落盘
             globalStateMgr.saveImage();
             replayedJournalId = globalStateMgr.getReplayedJournalId();
             if (MetricRepo.hasInit) {

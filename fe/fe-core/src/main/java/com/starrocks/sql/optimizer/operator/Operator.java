@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Objects;
 
 public abstract class Operator {
+
     public static final long DEFAULT_LIMIT = -1;
     public static final long DEFAULT_OFFSET = 0;
 

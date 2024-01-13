@@ -20,11 +20,17 @@ import com.starrocks.sql.optimizer.operator.scalar.ColumnRefOperator;
 import java.util.List;
 
 public class LogicalPlan {
+
+    /* 树的根节点 */
     private final OptExprBuilder root;
+
+    /* 最终输出 column 集合 */
     private final List<ColumnRefOperator> outputColumn;
+
     private final List<ColumnRefOperator> correlation;
 
-    public LogicalPlan(OptExprBuilder root, List<ColumnRefOperator> outputColumns,
+    public LogicalPlan(OptExprBuilder root,
+                       List<ColumnRefOperator> outputColumns,
                        List<ColumnRefOperator> correlation) {
         this.root = root;
         this.outputColumn = outputColumns;

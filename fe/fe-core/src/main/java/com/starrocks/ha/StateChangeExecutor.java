@@ -82,7 +82,7 @@ public class StateChangeExecutor extends Daemon {
             }
             Preconditions.checkNotNull(newType);
             FrontendNodeType feType = GlobalStateMgr.getCurrentState().getFeType();
-            LOG.info("begin to transfer FE type from {} to {}", feType, newType);
+            LOG.info("Start to transfer FE type from {} to {}", feType, newType);
             if (feType == newType) {
                 return;
             }
@@ -176,7 +176,7 @@ public class StateChangeExecutor extends Daemon {
                     break;
             } // end switch formerFeType
 
-            LOG.info("finished to transfer FE type from {} to {}", feType, newType);
+            LOG.info("Finished to transfer FE type from {} to {}", feType, newType);
         }
     } // end runOneCycle
 }

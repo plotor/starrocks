@@ -63,6 +63,7 @@ public class QeService {
                 && SSLChannelImpClassLoader.loadSSLChannelImpClazz() != null) {
             sslContext = createSSLContext();
         }
+        // 默认走 NIO
         if (nioEnabled) {
             mysqlServer = new NMysqlServer(port, scheduler, sslContext);
         } else {

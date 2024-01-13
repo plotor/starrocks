@@ -53,7 +53,6 @@ import com.starrocks.proto.PPulsarProxyRequest;
 import com.starrocks.proto.PPulsarProxyResult;
 import com.starrocks.proto.PTriggerProfileReportResult;
 import com.starrocks.proto.PUniqueId;
-import com.starrocks.rpc.PGetFileSchemaRequest;
 import com.starrocks.thrift.TExecBatchPlanFragmentsParams;
 import com.starrocks.thrift.TExecPlanFragmentParams;
 import com.starrocks.thrift.TMVMaintenanceTasks;
@@ -76,8 +75,8 @@ public class BackendServiceClient {
         return BackendServiceClient.SingletonHolder.INSTANCE;
     }
 
-    public Future<PExecPlanFragmentResult> execPlanFragmentAsync(
-            TNetworkAddress address, TExecPlanFragmentParams tRequest)
+    public Future<PExecPlanFragmentResult> execPlanFragmentAsync(TNetworkAddress address,
+                                                                 TExecPlanFragmentParams tRequest)
             throws TException, RpcException {
         final PExecPlanFragmentRequest pRequest = new PExecPlanFragmentRequest();
         pRequest.setRequest(tRequest);

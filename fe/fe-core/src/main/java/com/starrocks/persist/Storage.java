@@ -82,6 +82,7 @@ public class Storage {
     private String nodeName;
     private String hostType = "";
 
+    // 即 image 文件后缀 ID，即对应 image 文件包含的最后 1 条日志的 ID
     private long imageJournalId;
     private String metaDir;
 
@@ -104,9 +105,16 @@ public class Storage {
         reload();
     }
 
+    /**
+     * 1. 加载 VERSION 文件
+     * 2. 加载 ROLE 文件
+     * 3. 解析最新的 image 文件 imageJournalId
+     */
     public void reload() throws IOException {
         // Read version file info
         Properties prop = new Properties();
+
+        // 加载 VERSION 文件
         File versionFile = getVersionFile();
         if (versionFile.isFile()) {
             try (FileInputStream in = new FileInputStream(versionFile)) {
@@ -122,6 +130,7 @@ public class Storage {
 
         }
 
+        // 加载 ROLE 文件
         File roleFile = getRoleFile();
         if (roleFile.isFile()) {
             try (FileInputStream in = new FileInputStream(roleFile)) {
@@ -133,6 +142,7 @@ public class Storage {
             }
         }
 
+        // 解析最新的 image 文件 imageJournalId
         // Find the latest image
         File dir = new File(metaDir);
         File[] children = dir.listFiles();

@@ -54,9 +54,15 @@ public class LogicalSlot {
 
     private State state = State.CREATED;
 
-    public LogicalSlot(TUniqueId slotId, String requestFeName, long groupId, int numPhysicalSlots,
-                       long expiredPendingTimeMs, long expiredAllocatedTimeMs, long feStartTimeMs,
-                       int numFragments, int pipelineDop) {
+    public LogicalSlot(TUniqueId slotId,
+                       String requestFeName,
+                       long groupId,
+                       int numPhysicalSlots,
+                       long expiredPendingTimeMs,
+                       long expiredAllocatedTimeMs,
+                       long feStartTimeMs,
+                       int numFragments,
+                       int pipelineDop) {
         this.slotId = slotId;
         this.requestFeName = requestFeName;
         this.groupId = groupId;

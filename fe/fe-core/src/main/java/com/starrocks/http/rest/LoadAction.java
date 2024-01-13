@@ -58,6 +58,7 @@ import java.util.Collections;
 import java.util.List;
 
 public class LoadAction extends RestBaseAction {
+
     private static final Logger LOG = LogManager.getLogger(LoadAction.class);
 
     public LoadAction(ActionController controller) {
@@ -77,7 +78,7 @@ public class LoadAction extends RestBaseAction {
         } catch (DdlException e) {
             TransactionResult resp = new TransactionResult();
             resp.status = ActionStatus.FAILED;
-            resp.msg = e.getClass().toString() + ": " + e.getMessage();
+            resp.msg = e.getClass() + ": " + e.getMessage();
             LOG.warn(e);
 
             sendResult(request, response, resp);

@@ -54,6 +54,9 @@ import java.io.DataInputStream;
 import java.io.IOException;
 import java.util.List;
 
+/**
+ * 这个类封装了迭代访问指定 JournalId 区间的数据，主要用在变更日志回放场景，负责读取变更日志（ EditLog 会将变更日志回放到内存中）
+ */
 public class BDBJournalCursor implements JournalCursor {
     private static final Logger LOG = LogManager.getLogger(BDBJournalCursor.class);
     private static final int RETRY_TIME = 3;

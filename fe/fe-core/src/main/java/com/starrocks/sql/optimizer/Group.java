@@ -45,6 +45,13 @@ import java.util.Set;
  * which came from the initial query tree.
  */
 public class Group {
+
+    /**
+     * 一个 Group 中的 GroupExpression 是逻辑等价的，这里的逻辑等价是指：该 Group 中所有的GroupExpression 节点的输出数据都是相同的。
+     * 因此我们也可以这样认为，Group 表示了一组特定的数据，而 Group 中的 GroupExpression，表示了这一组特定数据是通过什么方式生成，
+     * 而生成数据的方式可以有很多种。
+     */
+
     private final int id;
 
     private final List<GroupExpression> logicalExpressions;

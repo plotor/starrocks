@@ -125,6 +125,9 @@ import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.stream.Collectors;
 
+/**
+ * 处理 BE Task 超时和重试
+ */
 public class ReportHandler extends Daemon implements MemoryTrackable {
     @Override
     public long estimateSize() {

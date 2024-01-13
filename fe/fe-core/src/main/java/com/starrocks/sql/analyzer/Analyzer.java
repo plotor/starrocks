@@ -30,6 +30,9 @@ public class Analyzer {
         this.analyzerVisitor = analyzerVisitor;
     }
 
+    /**
+     * 语义解析
+     */
     public static void analyze(StatementBase statement, ConnectContext context) {
         getInstance().analyzerVisitor.analyze(statement, context);
     }

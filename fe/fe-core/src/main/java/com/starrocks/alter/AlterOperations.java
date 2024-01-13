@@ -42,7 +42,7 @@ import com.starrocks.sql.ast.AlterClause;
 import java.util.List;
 import java.util.Set;
 
-/*
+/**
  * AlterOperations contains a set alter operations generated from a AlterStmt's alter clause.
  * This class is mainly used to integrate these operation types and check whether they have conflicts.
  */

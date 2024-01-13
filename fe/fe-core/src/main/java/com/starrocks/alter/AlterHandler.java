@@ -62,7 +62,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.locks.ReentrantLock;
 
 public abstract class AlterHandler extends FrontendDaemon {
+
     private static final Logger LOG = LogManager.getLogger(AlterHandler.class);
+
     protected ConcurrentMap<Long, AlterJobV2> alterJobsV2 = Maps.newConcurrentMap();
 
     /**
@@ -94,12 +96,12 @@ public abstract class AlterHandler extends FrontendDaemon {
 
     public void addAlterJobV2(AlterJobV2 alterJob) {
         this.alterJobsV2.put(alterJob.getJobId(), alterJob);
-        LOG.info("add {} job {}", alterJob.getType(), alterJob.getJobId());
+        LOG.info("Add {} job {}", alterJob.getType(), alterJob.getJobId());
     }
 
     public List<AlterJobV2> getUnfinishedAlterJobV2ByTableId(long tblId) {
         List<AlterJobV2> unfinishedAlterJobList = new ArrayList<>();
-        for (AlterJobV2 alterJob : alterJobsV2.values()) {
+        for (AlterJobV2 alterJob : getAlterJobsV2().values()) {
             if (alterJob.getTableId() == tblId
                     && alterJob.getJobState() != AlterJobV2.JobState.FINISHED
                     && alterJob.getJobState() != AlterJobV2.JobState.CANCELLED) {
@@ -110,7 +112,7 @@ public abstract class AlterHandler extends FrontendDaemon {
     }
 
     public AlterJobV2 getUnfinishedAlterJobV2ByJobId(long jobId) {
-        for (AlterJobV2 alterJob : alterJobsV2.values()) {
+        for (AlterJobV2 alterJob : getAlterJobsV2().values()) {
             if (alterJob.getJobId() == jobId && !alterJob.isDone()) {
                 return alterJob;
             }
@@ -123,7 +125,7 @@ public abstract class AlterHandler extends FrontendDaemon {
     }
 
     private void clearExpireFinishedOrCancelledAlterJobsV2() {
-        Iterator<Map.Entry<Long, AlterJobV2>> iterator = alterJobsV2.entrySet().iterator();
+        Iterator<Map.Entry<Long, AlterJobV2>> iterator = getAlterJobsV2().entrySet().iterator();
         while (iterator.hasNext()) {
             AlterJobV2 alterJobV2 = iterator.next().getValue();
             if (alterJobV2.isExpire()) {
@@ -147,11 +149,11 @@ public abstract class AlterHandler extends FrontendDaemon {
     }
 
     public Long getAlterJobV2Num(com.starrocks.alter.AlterJobV2.JobState state, long dbId) {
-        return alterJobsV2.values().stream().filter(e -> e.getJobState() == state && e.getDbId() == dbId).count();
+        return getAlterJobsV2().values().stream().filter(e -> e.getJobState() == state && e.getDbId() == dbId).count();
     }
 
     public Long getAlterJobV2Num(com.starrocks.alter.AlterJobV2.JobState state) {
-        return alterJobsV2.values().stream().filter(e -> e.getJobState() == state).count();
+        return getAlterJobsV2().values().stream().filter(e -> e.getJobState() == state).count();
     }
 
     // For UT

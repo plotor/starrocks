@@ -209,6 +209,10 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
         nullableTupleIds.clear();
     }
 
+    public String getPlanNodeName() {
+        return planNodeName;
+    }
+
     protected void setPlanNodeName(String s) {
         this.planNodeName = s;
     }

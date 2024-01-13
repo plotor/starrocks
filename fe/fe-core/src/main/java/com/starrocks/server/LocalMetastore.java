@@ -804,7 +804,7 @@ public class LocalMetastore implements ConnectorMetadata {
      */
     @Override
     public boolean createTable(CreateTableStmt stmt) throws DdlException {
-        // check if db exists
+        // check if db exists，检查数据库是否存在
         Database db = getDb(stmt.getDbName());
         if (db == null) {
             ErrorReport.reportDdlException(ErrorCode.ERR_BAD_DB_ERROR, stmt.getDbName());
@@ -815,6 +815,7 @@ public class LocalMetastore implements ConnectorMetadata {
         db.readLock();
         try {
             String tableName = stmt.getTableName();
+            // 表已存在
             if (db.getTable(tableName) != null) {
                 if (!stmt.isSetIfNotExists()) {
                     ErrorReport.reportDdlException(ErrorCode.ERR_TABLE_EXISTS_ERROR, tableName);
@@ -829,16 +830,19 @@ public class LocalMetastore implements ConnectorMetadata {
         // only internal table should check quota and cluster capacity
         if (!stmt.isExternal()) {
             // check cluster capacity
+            // 对于存算一体集群而言，检查是否有可用的磁盘空间
             GlobalStateMgr.getCurrentSystemInfo().checkClusterCapacity();
             // check db quota
             db.checkQuota();
         }
 
+        // 基于 Engine 类型获取对应的 TableFactory
         AbstractTableFactory tableFactory = TableFactoryProvider.getFactory(stmt.getEngineName());
         if (tableFactory == null) {
             ErrorReport.reportDdlException(ErrorCode.ERR_UNKNOWN_STORAGE_ENGINE, stmt.getEngineName());
         }
 
+        // 创建 Table
         Table table = tableFactory.createTable(this, db, stmt);
         String storageVolumeId = GlobalStateMgr.getCurrentState().getStorageVolumeMgr()
                 .getStorageVolumeIdOfTable(table.getId());
@@ -1638,8 +1642,12 @@ public class LocalMetastore implements ConnectorMetadata {
         }
     }
 
-    Partition createPartition(Database db, OlapTable table, long partitionId, String partitionName,
-                              Long version, Set<Long> tabletIdSet) throws DdlException {
+    Partition createPartition(Database db,
+                              OlapTable table,
+                              long partitionId,
+                              String partitionName,
+                              Long version,
+                              Set<Long> tabletIdSet) throws DdlException {
         PartitionInfo partitionInfo = table.getPartitionInfo();
         Map<Long, MaterializedIndex> indexMap = new HashMap<>();
         for (long indexId : table.getIndexIdToMeta().keySet()) {
@@ -1648,6 +1656,7 @@ public class LocalMetastore implements ConnectorMetadata {
         }
 
         DistributionInfo distributionInfo = table.getDefaultDistributionInfo().copy();
+        // 如果未指定 bucketNum，则按照一定的策略计算数量
         table.inferDistribution(distributionInfo);
 
         // create shard group
@@ -1665,8 +1674,10 @@ public class LocalMetastore implements ConnectorMetadata {
             partition.updateVisibleVersion(version);
         }
 
+        // 获取副本数
         short replicationNum = partitionInfo.getReplicationNum(partitionId);
         TStorageMedium storageMedium = partitionInfo.getDataProperty(partitionId).getStorageMedium();
+        // TODO 给每个 index 创建 tablets
         for (Map.Entry<Long, MaterializedIndex> entry : indexMap.entrySet()) {
             long indexId = entry.getKey();
             MaterializedIndex index = entry.getValue();
@@ -1681,9 +1692,12 @@ public class LocalMetastore implements ConnectorMetadata {
                 createLakeTablets(table, partitionId, shardGroupId, index, distributionInfo,
                         tabletMeta, tabletIdSet);
             } else {
+                // 创建 Tablet
                 createOlapTablets(table, index, Replica.ReplicaState.NORMAL, distributionInfo,
                         partition.getVisibleVersion(), replicationNum, tabletMeta, tabletIdSet);
             }
+
+            // baseIndex 表示基表，否则就是物化视图
             if (index.getId() != table.getBaseIndexId()) {
                 // add rollup index to partition
                 partition.createRollupIndex(index);
@@ -1710,14 +1724,17 @@ public class LocalMetastore implements ConnectorMetadata {
 
         int numReplicas = 0;
         for (Partition partition : partitions) {
-            numReplicas += partition.getReplicaCount();
+            numReplicas += (int) partition.getReplicaCount();
         }
 
+        // 并发创建
         if (numReplicas > Config.create_table_max_serial_replicas) {
             LOG.info("start to build {} partitions concurrently for table {}.{} with {} replicas",
                     partitions.size(), db.getFullName(), table.getName(), numReplicas);
             buildPartitionsConcurrently(db.getId(), table, partitions, numReplicas, numAliveBackends);
-        } else {
+        }
+        // 顺序创建
+        else {
             LOG.info("start to build {} partitions sequentially for table {}.{} with {} replicas",
                     partitions.size(), db.getFullName(), table.getName(), numReplicas);
             buildPartitionsSequentially(db.getId(), table, partitions, numReplicas, numAliveBackends);
@@ -1742,6 +1759,7 @@ public class LocalMetastore implements ConnectorMetadata {
         int partitionGroupSize = Math.max(1, numBackends * 200 / Math.max(1, avgReplicasPerPartition));
         for (int i = 0; i < partitions.size(); i += partitionGroupSize) {
             int endIndex = Math.min(partitions.size(), i + partitionGroupSize);
+            // 构造创建 CreateReplica 异步任务
             List<CreateReplicaTask> tasks = buildCreateReplicaTasks(dbId, table, partitions.subList(i, endIndex));
             int partitionCount = endIndex - i;
             int indexCountPerPartition = partitions.get(i).getVisibleMaterializedIndicesCount();
@@ -1926,25 +1944,24 @@ public class LocalMetastore implements ConnectorMetadata {
     private void sendCreateReplicaTasksAndWaitForFinished(List<CreateReplicaTask> tasks, long timeout)
             throws DdlException {
         MarkedCountDownLatch<Long, Long> countDownLatch = new MarkedCountDownLatch<>(tasks.size());
+        // 发送任务给 BE 执行（Thrift 格式），并等待执行完成
         sendCreateReplicaTasks(tasks, countDownLatch);
         waitForFinished(countDownLatch, timeout);
     }
 
     private void sendCreateReplicaTasks(List<CreateReplicaTask> tasks,
                                         MarkedCountDownLatch<Long, Long> countDownLatch) {
+        // Backend -> 批量任务
         HashMap<Long, AgentBatchTask> batchTaskMap = new HashMap<>();
         for (CreateReplicaTask task : tasks) {
             task.setLatch(countDownLatch);
             countDownLatch.addMark(task.getBackendId(), task.getTabletId());
-            AgentBatchTask batchTask = batchTaskMap.get(task.getBackendId());
-            if (batchTask == null) {
-                batchTask = new AgentBatchTask();
-                batchTaskMap.put(task.getBackendId(), batchTask);
-            }
+            AgentBatchTask batchTask = batchTaskMap.computeIfAbsent(task.getBackendId(), bid -> new AgentBatchTask());
             batchTask.addTask(task);
         }
         for (Map.Entry<Long, AgentBatchTask> entry : batchTaskMap.entrySet()) {
             AgentTaskQueue.addBatchTask(entry.getValue());
+            // 提交执行任务，任务将会以 Thrift RPC 形式发送给对应的 BE 执行
             AgentTaskExecutor.submit(entry.getValue());
         }
     }
@@ -1999,6 +2016,9 @@ public class LocalMetastore implements ConnectorMetadata {
 
     /*
      * generate and check columns' order and key's existence
+     *
+     * 1. 必须有 Key 列；
+     * 2. Key 列必须排在前面；
      */
     void validateColumns(List<Column> columns) throws DdlException {
         if (columns.isEmpty()) {
@@ -2048,6 +2068,11 @@ public class LocalMetastore implements ConnectorMetadata {
         table.setStorageInfo(pathInfo, dataCacheInfo);
     }
 
+    /**
+     * 1. 校验 db 是否存在，且不是系统 db
+     * 2. 将 table 注册给 db
+     * 3. 打印审计日志
+     */
     void onCreate(Database db, Table table, String storageVolumeId, boolean isSetIfNotExists) throws DdlException {
         // check database exists again, because database can be dropped when creating table
         if (!tryLock(false)) {
@@ -2104,6 +2129,7 @@ public class LocalMetastore implements ConnectorMetadata {
             LOG.info("Successfully create table: {}-{}, in database: {}-{}",
                     table.getName(), table.getId(), db.getFullName(), db.getId());
 
+            // 写 EditLog 元数据日志
             CreateTableInfo createTableInfo = new CreateTableInfo(db.getFullName(), table, storageVolumeId);
             GlobalStateMgr.getCurrentState().getEditLog().logCreateTable(createTableInfo);
             table.onCreate(db);
@@ -2209,6 +2235,7 @@ public class LocalMetastore implements ConnectorMetadata {
         // chooseBackendsArbitrary is true, means this may be the first table of colocation group,
         // or this is just a normal table, and we can choose backends arbitrary.
         // otherwise, backends should be chosen from backendsPerBucketSeq;
+        // 任意选择 Backend 存储副本，Colocate Group 不能随机选择
         boolean chooseBackendsArbitrary;
 
         // We should synchronize the creation of colocate tables, otherwise it can have concurrent issues.
@@ -2260,12 +2287,12 @@ public class LocalMetastore implements ConnectorMetadata {
             chooseBackendsArbitrary = true;
         }
 
-
-
         try {
             if (chooseBackendsArbitrary) {
                 backendsPerBucketSeq = Lists.newArrayList();
             }
+            // 按照分桶数量，为每个分桶创建一个 Tablet，
+            // 然后再按照 replicationNum 为每个 Tablet 创建对应数量的 Replica
             for (int i = 0; i < distributionInfo.getBucketNum(); ++i) {
                 // create a new tablet with random chosen backends
                 LocalTablet tablet = new LocalTablet(getNextId());
@@ -2284,6 +2311,7 @@ public class LocalMetastore implements ConnectorMetadata {
                                 chosenBackendIdBySeq(replicationNum, tabletMeta.getStorageMedium());
                     } else {
                         try {
+                            // 根据副本数选择对应数量的 Backend，每个 Backend 存储一个副本
                             chosenBackendIds = chosenBackendIdBySeq(replicationNum);
                         } catch (DdlException ex) {
                             throw new DdlException(String.format("%s, table=%s, default_replication_num=%d",
@@ -2806,7 +2834,7 @@ public class LocalMetastore implements ConnectorMetadata {
         return storageMediumMap;
     }
 
-    /*
+    /**
      * used for handling AlterTableStmt (for client is the ALTER TABLE command).
      * including SchemaChangeHandler and RollupHandler
      */

@@ -124,6 +124,8 @@ import java.util.concurrent.ExecutionException;
 /**
  * EditLog maintains a log of the memory modifications.
  * Current we support only file editLog.
+ *
+ * 负责将各种元数据变更日志持久化到 bdbje 中（存储到本地的文件中）；负责将单条变更日志回放到内存
  */
 public class EditLog {
     public static final Logger LOG = LogManager.getLogger(EditLog.class);
@@ -1114,7 +1116,9 @@ public class EditLog {
      * submit log to queue, wait for JournalWriter
      */
     protected void logEdit(short op, Writable writable) {
+        // 封装操作类型和日志内容为 JournalTask，并入队列
         JournalTask task = submitLog(op, writable, -1);
+        // 阻塞等待 JournalWriter 完成处理该 JournalTask
         waitInfinity(task);
     }
 
@@ -1129,9 +1133,9 @@ public class EditLog {
         Preconditions.checkState(RunMode.getCurrentRunMode() != RunMode.SHARED_NOTHING ||
                         GlobalStateMgr.getCurrentState().isLeader(),
                 "Current node is not leader, submit log is not allowed");
-        DataOutputBuffer buffer = new DataOutputBuffer(OUTPUT_BUFFER_INIT_SIZE);
 
-        // 1. serialized
+        // 1. serialized，将操作类型和 json 日志内容写入 buffer 中
+        DataOutputBuffer buffer = new DataOutputBuffer(OUTPUT_BUFFER_INIT_SIZE);
         try {
             JournalEntity entity = new JournalEntity();
             entity.setOpCode(op);
@@ -1141,6 +1145,7 @@ public class EditLog {
             // The old implementation swallow exception like this
             LOG.info("failed to serialize, ", e);
         }
+        // 构造 buffer 对应的 JournalTask 对象
         JournalTask task = new JournalTask(startTimeNano, buffer, maxWaitIntervalMs);
 
         /*
@@ -1148,7 +1153,7 @@ public class EditLog {
          * This PR will continue to swallow exception and retry till the end of the world like before.
          * Hope some day we'll fix it.
          */
-        // 2. put to queue
+        // 2. put to queue，将 JournalTask 入队列
         int cnt = 0;
         while (true) {
             try {
@@ -1156,6 +1161,7 @@ public class EditLog {
                     Thread.sleep(1000);
                 }
                 this.journalQueue.put(task);
+                LOG.info("Put journal task to journal queue, op: {}", op);
                 break;
             } catch (InterruptedException e) {
                 // got interrupted while waiting if necessary for space to become available
@@ -2056,6 +2062,7 @@ public class EditLog {
     }
 
     private void logJsonObject(short op, Object obj) {
+        // 将 obj 对象序列化成 JSON 字符串并填充到 out 对象中，然后执行 logEdit
         logEdit(op, out -> Text.writeString(out, GsonUtils.GSON.toJson(obj)));
     }
 

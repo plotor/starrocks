@@ -178,6 +178,7 @@ import com.starrocks.sql.optimizer.rule.tree.prunesubfield.SubfieldAccessPathNor
 import com.starrocks.sql.optimizer.rule.tree.prunesubfield.SubfieldExpressionCollector;
 import com.starrocks.sql.optimizer.statistics.Statistics;
 import com.starrocks.sql.optimizer.transformer.LogicalPlan;
+import com.starrocks.sql.plan.ScalarOperatorToExpr.FormatterContext;
 import com.starrocks.thrift.TBrokerFileStatus;
 import com.starrocks.thrift.TPartitionType;
 import com.starrocks.thrift.TResultSinkType;
@@ -209,15 +210,20 @@ public class PlanFragmentBuilder {
 
     private static final Logger LOG = LogManager.getLogger(PlanFragmentBuilder.class);
 
-    public static ExecPlan createPhysicalPlan(OptExpression plan, ConnectContext connectContext,
-                                              List<ColumnRefOperator> outputColumns, ColumnRefFactory columnRefFactory,
+    public static ExecPlan createPhysicalPlan(OptExpression plan,
+                                              ConnectContext connectContext,
+                                              List<ColumnRefOperator> outputColumns,
+                                              ColumnRefFactory columnRefFactory,
                                               List<String> colNames,
                                               TResultSinkType resultSinkType,
                                               boolean hasOutputFragment) {
         ExecPlan execPlan = new ExecPlan(connectContext, colNames, plan, outputColumns);
-        createOutputFragment(new PhysicalPlanTranslator(columnRefFactory).translate(plan, execPlan), execPlan,
-                outputColumns, hasOutputFragment);
+        // 基于 Antlr Visitor 构造 PlanFragment 树
+        PlanFragment fragment = new PhysicalPlanTranslator(columnRefFactory)
+                .translate(plan, execPlan);
+        createOutputFragment(fragment, execPlan, outputColumns, hasOutputFragment);
         execPlan.setPlanCount(plan.getPlanCount());
+        // 添加 Sink 算子连接 PlanFragment 之间的数据走向
         return finalizeFragments(execPlan, resultSinkType);
     }
 
@@ -274,22 +280,25 @@ public class PlanFragmentBuilder {
         return olapTuple;
     }
 
-    private static void createOutputFragment(PlanFragment inputFragment, ExecPlan execPlan,
+    private static void createOutputFragment(PlanFragment inputFragment,
+                                             ExecPlan execPlan,
                                              List<ColumnRefOperator> outputColumns,
                                              boolean hasOutputFragment) {
-        if (inputFragment.getPlanRoot() instanceof ExchangeNode || !inputFragment.isPartitioned() ||
-                !hasOutputFragment) {
-            List<Expr> outputExprs = outputColumns.stream().map(variable -> ScalarOperatorToExpr
-                    .buildExecExpression(variable,
-                            new ScalarOperatorToExpr.FormatterContext(execPlan.getColRefToExpr()))
-            ).collect(Collectors.toList());
+        if (inputFragment.getPlanRoot() instanceof ExchangeNode
+                || !inputFragment.isPartitioned()
+                || !hasOutputFragment) {
+            List<Expr> outputExprs = outputColumns.stream()
+                    .map(variable -> ScalarOperatorToExpr
+                            .buildExecExpression(variable, new FormatterContext(execPlan.getColRefToExpr()))
+                    ).collect(Collectors.toList());
             inputFragment.setOutputExprs(outputExprs);
             execPlan.getOutputExprs().addAll(outputExprs);
             return;
         }
 
-        List<Expr> outputExprs = outputColumns.stream().map(variable -> ScalarOperatorToExpr
-                        .buildExecExpression(variable, new ScalarOperatorToExpr.FormatterContext(execPlan.getColRefToExpr())))
+        List<Expr> outputExprs = outputColumns.stream()
+                .map(variable -> ScalarOperatorToExpr
+                        .buildExecExpression(variable, new FormatterContext(execPlan.getColRefToExpr())))
                 .collect(Collectors.toList());
         execPlan.getOutputExprs().addAll(outputExprs);
 
@@ -307,11 +316,11 @@ public class PlanFragmentBuilder {
             return;
         }
 
-        ExchangeNode exchangeNode =
-                new ExchangeNode(execPlan.getNextNodeId(), inputFragment.getPlanRoot(), DataPartition.UNPARTITIONED);
+        ExchangeNode exchangeNode = new ExchangeNode(
+                execPlan.getNextNodeId(), inputFragment.getPlanRoot(), DataPartition.UNPARTITIONED);
         exchangeNode.setNumInstances(1);
-        PlanFragment exchangeFragment =
-                new PlanFragment(execPlan.getNextFragmentId(), exchangeNode, DataPartition.UNPARTITIONED);
+        PlanFragment exchangeFragment = new PlanFragment(
+                execPlan.getNextFragmentId(), exchangeNode, DataPartition.UNPARTITIONED);
         inputFragment.setDestination(exchangeNode);
         inputFragment.setOutputPartition(DataPartition.UNPARTITIONED);
 
@@ -424,7 +433,9 @@ public class PlanFragmentBuilder {
         }
 
         public PlanFragment translate(OptExpression optExpression, ExecPlan context) {
+            // 基于 Antlr Visitor 构造 PlanFragment 树
             PlanFragment fragment = visit(optExpression, context);
+            // 计算 Fragment 总 Cost
             computeFragmentCost(context, fragment);
             return fragment;
         }
@@ -433,16 +444,18 @@ public class PlanFragmentBuilder {
             for (PlanFragment child : fragment.getChildren()) {
                 computeFragmentCost(context, child);
             }
-            OptExpression output = getOptExpression(context, fragment.getPlanRoot());
 
+            OptExpression output = getOptExpression(context, fragment.getPlanRoot());
             // scan fragment
             if (fragment.getLeftMostNode() instanceof ScanNode) {
                 fragment.setFragmentCost(output.getCost());
                 return;
             }
 
-            List<OptExpression> inputs = fragment.getChildren().stream().map(PlanFragment::getPlanRoot)
-                    .map(p -> getOptExpression(context, p)).collect(Collectors.toList());
+            List<OptExpression> inputs = fragment.getChildren().stream()
+                    .map(PlanFragment::getPlanRoot)
+                    .map(p -> getOptExpression(context, p))
+                    .collect(Collectors.toList());
 
             double childCost = inputs.stream().map(OptExpression::getCost).reduce(Double::sum).orElse(0D);
             fragment.setFragmentCost(output.getCost() - childCost);
@@ -454,6 +467,7 @@ public class PlanFragmentBuilder {
             }
             return context.getOptExpression(node.getId().asInt());
         }
+
         @Override
         public PlanFragment visit(OptExpression optExpression, ExecPlan context) {
             canUseLocalShuffleAgg &= optExpression.arity() <= 1;
@@ -555,7 +569,7 @@ public class PlanFragmentBuilder {
             Map<SlotId, Expr> commonSubOperatorMap = Maps.newHashMap();
             for (Map.Entry<ColumnRefOperator, ScalarOperator> entry : node.getCommonSubOperatorMap().entrySet()) {
                 Expr expr = ScalarOperatorToExpr.buildExecExpression(entry.getValue(),
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr(),
+                        new FormatterContext(context.getColRefToExpr(),
                                 node.getCommonSubOperatorMap()));
 
                 commonSubOperatorMap.put(new SlotId(entry.getKey().getId()), expr);
@@ -571,7 +585,7 @@ public class PlanFragmentBuilder {
             Map<SlotId, Expr> projectMap = Maps.newHashMap();
             for (Map.Entry<ColumnRefOperator, ScalarOperator> entry : node.getColumnRefMap().entrySet()) {
                 Expr expr = ScalarOperatorToExpr.buildExecExpression(entry.getValue(),
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr(), node.getColumnRefMap()));
+                        new FormatterContext(context.getColRefToExpr(), node.getColumnRefMap()));
 
                 projectMap.put(new SlotId(entry.getKey().getId()), expr);
 
@@ -618,7 +632,7 @@ public class PlanFragmentBuilder {
             Map<SlotId, Expr> commonSubOperatorMap = Maps.newHashMap();
             for (Map.Entry<ColumnRefOperator, ScalarOperator> entry : node.getCommonSubOperatorMap().entrySet()) {
                 Expr expr = ScalarOperatorToExpr.buildExecExpression(entry.getValue(),
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr(),
+                        new FormatterContext(context.getColRefToExpr(),
                                 node.getCommonSubOperatorMap()));
 
                 commonSubOperatorMap.put(new SlotId(entry.getKey().getId()), expr);
@@ -634,7 +648,7 @@ public class PlanFragmentBuilder {
             Map<SlotId, Expr> projectMap = Maps.newHashMap();
             for (Map.Entry<ColumnRefOperator, ScalarOperator> entry : node.getColumnRefMap().entrySet()) {
                 Expr expr = ScalarOperatorToExpr.buildExecExpression(entry.getValue(),
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr(), node.getColumnRefMap()));
+                        new FormatterContext(context.getColRefToExpr(), node.getColumnRefMap()));
 
                 projectMap.put(new SlotId(entry.getKey().getId()), expr);
 
@@ -711,7 +725,7 @@ public class PlanFragmentBuilder {
             Map<SlotId, Expr> projectMap = Maps.newHashMap();
             for (Map.Entry<ColumnRefOperator, ScalarOperator> entry : node.getStringFunctions().entrySet()) {
                 Expr expr = ScalarOperatorToExpr.buildExecExpression(entry.getValue(),
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr(),
+                        new FormatterContext(context.getColRefToExpr(),
                                 node.getStringFunctions()));
 
                 projectMap.put(new SlotId(entry.getKey().getId()), expr);
@@ -770,15 +784,18 @@ public class PlanFragmentBuilder {
             TupleDescriptor tupleDescriptor = context.getDescTbl().createTupleDescriptor();
             tupleDescriptor.setTable(referenceTable);
 
-            OlapScanNode scanNode = new OlapScanNode(context.getNextNodeId(), tupleDescriptor, "OlapScanNode");
+            OlapScanNode scanNode = new OlapScanNode(
+                    context.getNextNodeId(), tupleDescriptor, "OlapScanNode");
             scanNode.setLimit(node.getLimit());
             scanNode.computeStatistics(optExpr.getStatistics());
             scanNode.setScanOptimzeOption(node.getScanOptimzeOption());
             // set tablet
             try {
-                scanNode.updateScanInfo(node.getSelectedPartitionId(),
+                scanNode.updateScanInfo(
+                        node.getSelectedPartitionId(),
                         node.getSelectedTabletId(),
-                        node.getSelectedIndexId());
+                        node.getSelectedIndexId()
+                );
                 long selectedIndexId = node.getSelectedIndexId();
                 long totalTabletsNum = 0;
                 // Compatible with old tablet selected, copy from "OlapScanNode::computeTabletInfo"
@@ -789,10 +806,12 @@ public class PlanFragmentBuilder {
                             .getBackendIdByHost(FrontendOptions.getLocalHostAddress());
                 }
 
-                List<Long> selectedNonEmptyPartitionIds = node.getSelectedPartitionId().stream().filter(p -> {
-                    List<Long> selectTabletIds = scanNode.getPartitionToScanTabletMap().get(p);
-                    return selectTabletIds != null && !selectTabletIds.isEmpty();
-                }).collect(Collectors.toList());
+                List<Long> selectedNonEmptyPartitionIds = node.getSelectedPartitionId().stream()
+                        .filter(p -> {
+                            List<Long> selectTabletIds = scanNode.getPartitionToScanTabletMap().get(p);
+                            return CollectionUtils.isNotEmpty(selectTabletIds);
+                        })
+                        .collect(Collectors.toList());
                 scanNode.setSelectedPartitionIds(selectedNonEmptyPartitionIds);
                 for (Long partitionId : scanNode.getSelectedPartitionIds()) {
                     List<Long> selectTabletIds = scanNode.getPartitionToScanTabletMap().get(partitionId);
@@ -806,8 +825,9 @@ public class PlanFragmentBuilder {
                     }
                     totalTabletsNum += selectedTable.getTablets().size();
                     scanNode.setTabletId2BucketSeq(tabletId2BucketSeq);
-                    List<Tablet> tablets =
-                            selectTabletIds.stream().map(selectedTable::getTablet).collect(Collectors.toList());
+                    List<Tablet> tablets = selectTabletIds.stream()
+                            .map(selectedTable::getTablet)
+                            .collect(Collectors.toList());
                     scanNode.addScanRangeLocations(partition, selectedTable, tablets, localBeId);
                 }
                 scanNode.setTotalTabletsNum(totalTabletsNum);
@@ -818,8 +838,8 @@ public class PlanFragmentBuilder {
 
             // set slot
             for (Map.Entry<ColumnRefOperator, Column> entry : node.getColRefToColumnMetaMap().entrySet()) {
-                SlotDescriptor slotDescriptor =
-                        context.getDescTbl().addSlotDescriptor(tupleDescriptor, new SlotId(entry.getKey().getId()));
+                SlotDescriptor slotDescriptor = context.getDescTbl()
+                        .addSlotDescriptor(tupleDescriptor, new SlotId(entry.getKey().getId()));
                 slotDescriptor.setColumn(entry.getValue());
                 slotDescriptor.setIsNullable(entry.getValue().isAllowNull());
                 slotDescriptor.setIsMaterialized(true);
@@ -827,7 +847,8 @@ public class PlanFragmentBuilder {
                     slotDescriptor.setOriginType(entry.getKey().getType());
                     slotDescriptor.setType(entry.getKey().getType());
                 }
-                context.getColRefToExpr().put(entry.getKey(), new SlotRef(entry.getKey().toString(), slotDescriptor));
+                context.getColRefToExpr()
+                        .put(entry.getKey(), new SlotRef(entry.getKey().toString(), slotDescriptor));
             }
 
             // set column access path
@@ -835,11 +856,11 @@ public class PlanFragmentBuilder {
 
             // set predicate
             List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext = new FormatterContext(context.getColRefToExpr());
 
             for (ScalarOperator predicate : predicates) {
-                scanNode.getConjuncts().add(ScalarOperatorToExpr.buildExecExpression(predicate, formatterContext));
+                scanNode.getConjuncts()
+                        .add(ScalarOperatorToExpr.buildExecExpression(predicate, formatterContext));
             }
 
             for (ScalarOperator predicate : node.getPrunedPartitionPredicates()) {
@@ -856,14 +877,18 @@ public class PlanFragmentBuilder {
             // set isPreAggregation
             scanNode.setIsPreAggregation(node.isPreAggregation(), node.getTurnOffReason());
             scanNode.setDictStringIdToIntIds(node.getDictStringIdToIntIds());
-            scanNode.updateAppliedDictStringColumns(node.getGlobalDicts().stream().
-                    map(entry -> entry.first).collect(Collectors.toSet()));
+            scanNode.updateAppliedDictStringColumns(node.getGlobalDicts().stream()
+                    .map(entry -> entry.first)
+                    .collect(Collectors.toSet()));
 
             scanNode.setUsePkIndex(node.isUsePkIndex());
 
             context.getScanNodes().add(scanNode);
-            PlanFragment fragment =
-                    new PlanFragment(context.getNextFragmentId(), scanNode, DataPartition.RANDOM);
+            PlanFragment fragment = new PlanFragment(
+                    context.getNextFragmentId(),
+                    scanNode,
+                    DataPartition.RANDOM
+            );
             fragment.setQueryGlobalDicts(node.getGlobalDicts());
             context.getFragments().add(fragment);
             return fragment;
@@ -923,8 +948,8 @@ public class PlanFragmentBuilder {
             List<ScalarOperator> noEvalPartitionConjuncts = predicates.getNoEvalPartitionConjuncts();
             List<ScalarOperator> nonPartitionConjuncts = predicates.getNonPartitionConjuncts();
             List<ScalarOperator> partitionConjuncts = predicates.getPartitionConjuncts();
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext =
+                    new FormatterContext(context.getColRefToExpr());
 
             for (ScalarOperator partitionConjunct : partitionConjuncts) {
                 scanNodePredicates.getPartitionConjuncts().
@@ -963,8 +988,8 @@ public class PlanFragmentBuilder {
             }
             minMaxTuple.computeMemLayout();
             scanNodePredicates.setMinMaxTuple(minMaxTuple);
-            ScalarOperatorToExpr.FormatterContext minMaxFormatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext minMaxFormatterContext =
+                    new FormatterContext(context.getColRefToExpr());
             for (ScalarOperator minMaxConjunct : minMaxConjuncts) {
                 scanNodePredicates.getMinMaxConjuncts().
                         add(ScalarOperatorToExpr.buildExecExpression(minMaxConjunct, minMaxFormatterContext));
@@ -1111,8 +1136,8 @@ public class PlanFragmentBuilder {
             deltaLakeScanNode.setScanOptimzeOption(node.getScanOptimzeOption());
             try {
                 // set predicate
-                ScalarOperatorToExpr.FormatterContext formatterContext =
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+                FormatterContext formatterContext =
+                        new FormatterContext(context.getColRefToExpr());
                 List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
                 for (ScalarOperator predicate : predicates) {
                     deltaLakeScanNode.getConjuncts()
@@ -1153,8 +1178,8 @@ public class PlanFragmentBuilder {
             paimonScanNode.setScanOptimzeOption(node.getScanOptimzeOption());
             try {
                 // set predicate
-                ScalarOperatorToExpr.FormatterContext formatterContext =
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+                FormatterContext formatterContext =
+                        new FormatterContext(context.getColRefToExpr());
                 List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
                 for (ScalarOperator predicate : predicates) {
                     paimonScanNode.getConjuncts()
@@ -1199,8 +1224,8 @@ public class PlanFragmentBuilder {
             icebergScanNode.setScanOptimzeOption(node.getScanOptimzeOption());
             try {
                 // set predicate
-                ScalarOperatorToExpr.FormatterContext formatterContext =
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+                FormatterContext formatterContext =
+                        new FormatterContext(context.getColRefToExpr());
                 List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
                 for (ScalarOperator predicate : predicates) {
                     icebergScanNode.getConjuncts()
@@ -1258,8 +1283,8 @@ public class PlanFragmentBuilder {
 
             // set predicate
             List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext =
+                    new FormatterContext(context.getColRefToExpr());
 
             for (ScalarOperator predicate : predicates) {
                 scanNode.getConjuncts().add(ScalarOperatorToExpr.buildExecExpression(predicate, formatterContext));
@@ -1407,8 +1432,8 @@ public class PlanFragmentBuilder {
 
             // set predicate
             List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext =
+                    new FormatterContext(context.getColRefToExpr());
             for (ScalarOperator predicate : predicates) {
                 scanNode.getConjuncts().add(ScalarOperatorToExpr.buildExecExpression(predicate, formatterContext));
             }
@@ -1446,8 +1471,8 @@ public class PlanFragmentBuilder {
             EsScanNode scanNode = new EsScanNode(context.getNextNodeId(), tupleDescriptor, "EsScanNode");
             // set predicate
             List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext =
+                    new FormatterContext(context.getColRefToExpr());
 
             for (ScalarOperator predicate : predicates) {
                 scanNode.getConjuncts().add(ScalarOperatorToExpr.buildExecExpression(predicate, formatterContext));
@@ -1492,8 +1517,8 @@ public class PlanFragmentBuilder {
 
             // set predicate
             List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext =
+                    new FormatterContext(context.getColRefToExpr());
             for (ScalarOperator predicate : predicates) {
                 scanNode.getConjuncts().add(ScalarOperatorToExpr.buildExecExpression(predicate, formatterContext));
             }
@@ -1542,7 +1567,7 @@ public class PlanFragmentBuilder {
                     List<Expr> exprRow = new ArrayList<>();
                     for (ScalarOperator field : row) {
                         exprRow.add(ScalarOperatorToExpr.buildExecExpression(
-                                field, new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())));
+                                field, new FormatterContext(context.getColRefToExpr())));
                     }
                     consts.add(exprRow);
                 }
@@ -1701,7 +1726,7 @@ public class PlanFragmentBuilder {
             if (!forExchangePerf) {
                 for (ColumnRefOperator grouping : CollectionUtils.emptyIfNull(groupBys)) {
                     Expr groupingExpr = ScalarOperatorToExpr.buildExecExpression(grouping,
-                            new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr()));
+                            new FormatterContext(context.getColRefToExpr()));
 
                     groupingExpressions.add(groupingExpr);
 
@@ -1718,7 +1743,7 @@ public class PlanFragmentBuilder {
             List<Boolean> removeDistinctFlags = Lists.newArrayList();
             for (Map.Entry<ColumnRefOperator, CallOperator> aggregation : aggregations.entrySet()) {
                 FunctionCallExpr aggExpr = (FunctionCallExpr) ScalarOperatorToExpr.buildExecExpression(
-                        aggregation.getValue(), new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr()));
+                        aggregation.getValue(), new FormatterContext(context.getColRefToExpr()));
 
                 aggregateExprList.add(aggExpr);
                 removeDistinctFlags.add(aggregation.getValue().isRemovedDistinct());
@@ -1744,7 +1769,7 @@ public class PlanFragmentBuilder {
             ArrayList<Expr> partitionExpressions = Lists.newArrayList();
             for (ColumnRefOperator column : CollectionUtils.emptyIfNull(partitionBys)) {
                 Expr partitionExpr = ScalarOperatorToExpr.buildExecExpression(column,
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr()));
+                        new FormatterContext(context.getColRefToExpr()));
 
                 SlotDescriptor slotDesc =
                         context.getDescTbl().addSlotDescriptor(outputTupleDesc, new SlotId(column.getId()));
@@ -1844,8 +1869,8 @@ public class PlanFragmentBuilder {
 
                 // set predicate
                 List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
-                ScalarOperatorToExpr.FormatterContext formatterContext =
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+                FormatterContext formatterContext =
+                        new FormatterContext(context.getColRefToExpr());
 
                 for (ScalarOperator predicate : predicates) {
                     aggregationNode.getConjuncts()
@@ -2008,7 +2033,7 @@ public class PlanFragmentBuilder {
                         getShuffleColumns((HashDistributionSpec) distribution.getDistributionSpec());
                 List<Expr> distributeExpressions =
                         partitionColumns.stream().map(e -> ScalarOperatorToExpr.buildExecExpression(e,
-                                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())))
+                                        new FormatterContext(context.getColRefToExpr())))
                                 .collect(Collectors.toList());
                 dataPartition = DataPartition.hashPartitioned(distributeExpressions);
             } else {
@@ -2088,14 +2113,14 @@ public class PlanFragmentBuilder {
             if (CollectionUtils.isNotEmpty(partitionByColumns)) {
                 for (ColumnRefOperator partitionByColumn : partitionByColumns) {
                     Expr expr = ScalarOperatorToExpr.buildExecExpression(partitionByColumn,
-                            new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr()));
+                            new FormatterContext(context.getColRefToExpr()));
                     partitionExprs.add(expr);
                 }
             }
 
             for (Ordering ordering : orderSpec.getOrderDescs()) {
                 Expr sortExpr = ScalarOperatorToExpr.buildExecExpression(ordering.getColumnRef(),
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr()));
+                        new FormatterContext(context.getColRefToExpr()));
 
                 SlotDescriptor slotDesc =
                         context.getDescTbl().addSlotDescriptor(sortTuple, new SlotId(ordering.getColumnRef().getId()));
@@ -2119,7 +2144,7 @@ public class PlanFragmentBuilder {
                 if (orderSpec.getOrderDescs().stream().map(Ordering::getColumnRef)
                         .noneMatch(c -> c.equals(columnRef))) {
                     Expr outputExpr = ScalarOperatorToExpr.buildExecExpression(columnRef,
-                            new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr()));
+                            new FormatterContext(context.getColRefToExpr()));
 
                     SlotDescriptor slotDesc =
                             context.getDescTbl().addSlotDescriptor(sortTuple, new SlotId(columnRef.getId()));
@@ -2189,7 +2214,7 @@ public class PlanFragmentBuilder {
         private List<Expr> extractConjuncts(ScalarOperator predicate, ExecPlan context) {
             return Utils.extractConjuncts(predicate).stream()
                     .map(e -> ScalarOperatorToExpr.buildExecExpression(e,
-                            new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())))
+                            new FormatterContext(context.getColRefToExpr())))
                     .collect(Collectors.toList());
         }
 
@@ -2312,7 +2337,7 @@ public class PlanFragmentBuilder {
         private List<Expr> getShuffleExprs(HashDistributionSpec hashDistributionSpec, ExecPlan context) {
             List<ColumnRefOperator> shuffleColumns = getShuffleColumns(hashDistributionSpec);
             return shuffleColumns.stream().map(e -> ScalarOperatorToExpr.buildExecExpression(e,
-                            new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())))
+                            new FormatterContext(context.getColRefToExpr())))
                     .collect(Collectors.toList());
         }
 
@@ -2504,7 +2529,7 @@ public class PlanFragmentBuilder {
             TupleDescriptor outputTupleDesc = context.getDescTbl().createTupleDescriptor();
             for (Map.Entry<ColumnRefOperator, CallOperator> analyticCall : node.getAnalyticCall().entrySet()) {
                 Expr analyticFunction = ScalarOperatorToExpr.buildExecExpression(analyticCall.getValue(),
-                        new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr()));
+                        new FormatterContext(context.getColRefToExpr()));
                 analyticFnCalls.add(analyticFunction);
 
                 SlotDescriptor slotDesc = context.getDescTbl()
@@ -2519,12 +2544,12 @@ public class PlanFragmentBuilder {
 
             List<Expr> partitionExprs =
                     node.getPartitionExpressions().stream().map(e -> ScalarOperatorToExpr.buildExecExpression(e,
-                                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())))
+                                    new FormatterContext(context.getColRefToExpr())))
                             .collect(Collectors.toList());
 
             List<OrderByElement> orderByElements = node.getOrderByElements().stream().map(e -> new OrderByElement(
                     ScalarOperatorToExpr.buildExecExpression(e.getColumnRef(),
-                            new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())),
+                            new FormatterContext(context.getColRefToExpr())),
                     e.isAscending(), e.isNullsFirst())).collect(Collectors.toList());
 
             AnalyticEvalNode analyticEvalNode = new AnalyticEvalNode(
@@ -2548,8 +2573,8 @@ public class PlanFragmentBuilder {
 
             // set predicate
             List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext =
+                    new FormatterContext(context.getColRefToExpr());
             for (ScalarOperator predicate : predicates) {
                 analyticEvalNode.getConjuncts()
                         .add(ScalarOperatorToExpr.buildExecExpression(predicate, formatterContext));
@@ -2617,8 +2642,8 @@ public class PlanFragmentBuilder {
                     new PlanFragment(context.getNextFragmentId(), setOperationNode, DataPartition.RANDOM);
             List<List<Expr>> materializedResultExprLists = Lists.newArrayList();
 
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext =
+                    new FormatterContext(context.getColRefToExpr());
             for (int i = 0; i < optExpr.getInputs().size(); i++) {
                 List<ColumnRefOperator> childOutput = setOperation.getChildOutputColumns().get(i);
                 PlanFragment fragment = visit(optExpr.getInputs().get(i), context);
@@ -2712,8 +2737,8 @@ public class PlanFragmentBuilder {
                     repeatSlotIdList,
                     repeatOperator.getGroupingIds());
             List<ScalarOperator> predicates = Utils.extractConjuncts(repeatOperator.getPredicate());
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext =
+                    new FormatterContext(context.getColRefToExpr());
 
             for (ScalarOperator predicate : predicates) {
                 repeatNode.getConjuncts().add(ScalarOperatorToExpr.buildExecExpression(predicate, formatterContext));
@@ -2731,7 +2756,7 @@ public class PlanFragmentBuilder {
 
             List<Expr> predicates = Utils.extractConjuncts(filter.getPredicate()).stream()
                     .map(d -> ScalarOperatorToExpr.buildExecExpression(d,
-                            new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())))
+                            new FormatterContext(context.getColRefToExpr())))
                     .collect(Collectors.toList());
 
             SelectNode selectNode =
@@ -2811,7 +2836,7 @@ public class PlanFragmentBuilder {
             if (consume.getPredicate() != null) {
                 List<Expr> predicates = Utils.extractConjuncts(consume.getPredicate()).stream()
                         .map(d -> ScalarOperatorToExpr.buildExecExpression(d,
-                                new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())))
+                                new FormatterContext(context.getColRefToExpr())))
                         .collect(Collectors.toList());
                 SelectNode selectNode =
                         new SelectNode(context.getNextNodeId(), consumeFragment.getPlanRoot(), predicates);
@@ -2905,7 +2930,7 @@ public class PlanFragmentBuilder {
 
             List<Expr> eqJoinConjuncts =
                     eqOnPredicates.stream().map(e -> ScalarOperatorToExpr.buildExecExpression(e,
-                                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())))
+                                    new FormatterContext(context.getColRefToExpr())))
                             .collect(Collectors.toList());
 
             for (Expr expr : eqJoinConjuncts) {
@@ -2917,12 +2942,12 @@ public class PlanFragmentBuilder {
             List<ScalarOperator> otherJoin = onPredicates;
             otherJoin.removeAll(eqOnPredicates);
             List<Expr> otherJoinConjuncts = otherJoin.stream().map(e -> ScalarOperatorToExpr.buildExecExpression(e,
-                            new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())))
+                            new FormatterContext(context.getColRefToExpr())))
                     .collect(Collectors.toList());
 
             List<ScalarOperator> predicates = Utils.extractConjuncts(predicate);
             List<Expr> conjuncts = predicates.stream().map(e -> ScalarOperatorToExpr.buildExecExpression(e,
-                            new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr())))
+                            new FormatterContext(context.getColRefToExpr())))
                     .collect(Collectors.toList());
             ColumnRefSet requiredColsForFilter = new ColumnRefSet();
             otherJoin.stream().forEach(e -> requiredColsForFilter.union(e.getUsedColumns()));
@@ -3179,8 +3204,8 @@ public class PlanFragmentBuilder {
 
             // set predicate
             List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext =
+                    new FormatterContext(context.getColRefToExpr());
             for (ScalarOperator predicate : predicates) {
                 binlogScanNode.getConjuncts()
                         .add(ScalarOperatorToExpr.buildExecExpression(predicate, formatterContext));
@@ -3258,8 +3283,8 @@ public class PlanFragmentBuilder {
 
             // set predicate
             List<ScalarOperator> predicates = Utils.extractConjuncts(node.getPredicate());
-            ScalarOperatorToExpr.FormatterContext formatterContext =
-                    new ScalarOperatorToExpr.FormatterContext(context.getColRefToExpr());
+            FormatterContext formatterContext =
+                    new FormatterContext(context.getColRefToExpr());
             for (ScalarOperator predicate : predicates) {
                 scanNode.getConjuncts().add(ScalarOperatorToExpr.buildExecExpression(predicate, formatterContext));
             }

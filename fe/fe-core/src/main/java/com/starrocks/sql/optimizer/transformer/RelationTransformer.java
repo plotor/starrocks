@@ -157,9 +157,11 @@ public class RelationTransformer extends AstVisitor<LogicalPlan, ExpressionMappi
     // transform relation to plan with session variable sql_select_limit
     // only top relation need set limit, transform method used by CTE/Subquery/Insert
     public LogicalPlan transformWithSelectLimit(Relation relation) {
+        // 基于 Antlr Vistor 构建 LogicalPlan 语法树
         LogicalPlan plan = transform(relation);
+        // 获取树的根节点
         OptExprBuilder root = plan.getRootBuilder();
-        // Set limit if user set sql_select_limit.
+        // Set limit if user set sql_select_limit. 按需设置 LIMIT 算子
         long selectLimit = ConnectContext.get().getSessionVariable().getSqlSelectLimit();
         if (!root.getRoot().getOp().hasLimit() && selectLimit != SessionVariable.DEFAULT_SELECT_LIMIT) {
             LogicalLimitOperator limitOperator = LogicalLimitOperator.init(selectLimit);
@@ -172,7 +174,9 @@ public class RelationTransformer extends AstVisitor<LogicalPlan, ExpressionMappi
 
     // transform relation without considering the sql_select_limit
     public LogicalPlan transform(Relation relation) {
-        if (relation instanceof QueryRelation && !((QueryRelation) relation).getCteRelations().isEmpty()) {
+        if (relation instanceof QueryRelation
+                // 包含 CTE 公共表表达式
+                && !((QueryRelation) relation).getCteRelations().isEmpty()) {
             QueryRelation queryRelation = (QueryRelation) relation;
             if (queryRelation.getCteRelations().stream().noneMatch(c -> c.getRefs() > 1)) {
                 // all cte is only referenced once, no need to reuse

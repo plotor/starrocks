@@ -21,6 +21,9 @@ import com.starrocks.sql.optimizer.rule.RuleType;
 
 /**
  * Implementation rules: logical -> physical
+ *
+ * 用于将 LogicalOperator 翻译成 PhysicalOperator，
+ * 几乎每一个 LogicalOperator 都有对应的一个或者多个 PhysicalOperator
  */
 public abstract class ImplementationRule extends Rule {
 

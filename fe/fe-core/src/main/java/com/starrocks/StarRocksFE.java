@@ -167,11 +167,14 @@ public class StarRocksFE {
 
             // init and start:
             // 1. QeService for MySQL Server
+            QeService qeService = new QeService(
+                    Config.query_port, // 默认端口 9030
+                    Config.mysql_service_nio_enabled, // 默认采用 NIO 模式
+                    ExecuteEnv.getInstance().getScheduler() // ConnectScheduler
+            );
             // 2. FeServer for Thrift Server
-            // 3. HttpServer for HTTP Server
-            QeService qeService = new QeService(Config.query_port, Config.mysql_service_nio_enabled,
-                    ExecuteEnv.getInstance().getScheduler());
             FeServer feServer = new FeServer(Config.rpc_port);
+            // 3. HttpServer for HTTP Server
             HttpServer httpServer = new HttpServer(Config.http_port);
             httpServer.setup();
 
@@ -345,7 +348,7 @@ public class StarRocksFE {
             System.out.println("Java compile version: " + Version.STARROCKS_JAVA_COMPILE_VERSION);
             System.exit(0);
         } else if (cmdLineOpts.runBdbTools()) {
-            
+
             BDBTool bdbTool = new BDBTool(BDBEnvironment.getBdbDir(), cmdLineOpts.getBdbToolOpts());
             if (bdbTool.run()) {
                 System.exit(0);

@@ -503,7 +503,7 @@ public class PlanFragment extends TreeNode<PlanFragment> {
             outputBuilder.append(outputExprs.stream().map(Expr::toSql)
                     .collect(Collectors.joining(" | ")));
         }
-        str.append(outputBuilder.toString());
+        str.append(outputBuilder);
         str.append("\n");
         str.append("  Input Partition: ").append(dataPartition.getExplainString(TExplainLevel.NORMAL));
         if (sink != null) {
@@ -731,6 +731,22 @@ public class PlanFragment extends TreeNode<PlanFragment> {
             node = node.getChild(0);
         }
         return node;
+    }
+
+    public String explain() {
+        return explain("", "");
+    }
+
+    private String explain(String headlinePrefix, String detailPrefix) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(headlinePrefix).
+                append(planRoot.getPlanNodeName()).append('\n');
+        String childHeadlinePrefix = detailPrefix + "->  ";
+        String childDetailPrefix = detailPrefix + "    ";
+        for (PlanFragment fragment : getChildren()) {
+            sb.append(fragment.explain(childHeadlinePrefix, childDetailPrefix));
+        }
+        return sb.toString();
     }
 
 }

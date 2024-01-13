@@ -47,6 +47,13 @@ import java.util.Set;
  * All the group should be created from this class.
  */
 public class Memo {
+
+    /*
+     * Memo 用于记录优化器搜索过程中产生的各种备选的 Plan。其基本单位为 Group，每当我们 Copy 一个新的计划到 Memo 中，
+     * 会根据逻辑计划的节点生成新的 Group 或者加入到已有的 Group 中。而在 Memo 中，Group 和 Group 之间通过
+     * GroupExpression 建立引用关系，可以进一步表述出一棵执行计划树。
+     */
+
     private static final Logger LOG = LogManager.getLogger(Memo.class);
 
     private int nextGroupId = 0;

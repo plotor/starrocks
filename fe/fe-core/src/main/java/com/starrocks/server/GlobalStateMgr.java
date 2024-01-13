@@ -1119,7 +1119,7 @@ public class GlobalStateMgr {
             nodeMgr.initialize(args);
 
             // 1. create dirs and files
-            if (Config.edit_log_type.equalsIgnoreCase("bdb")) {
+            if ("bdb".equalsIgnoreCase(Config.edit_log_type)) {
                 File imageDir = new File(this.imageDir);
                 if (!imageDir.exists()) {
                     imageDir.mkdirs();
@@ -1129,11 +1129,13 @@ public class GlobalStateMgr {
                 System.exit(-1);
             }
 
-            // init plugin manager
+            // init plugin manager，主要是 audit log 插件
             pluginMgr.init();
+            // 启动 audit log 事件处理器
             auditEventProcessor.start();
 
             // 2. get cluster id and role (Observer or Follower)
+            // // 从 ROLE 和 VERSION 文件加载集群和节点的基本信息
             nodeMgr.getClusterIdAndRoleOnStartup();
 
             // 3. Load image first and replay edits
@@ -1198,11 +1200,15 @@ public class GlobalStateMgr {
     }
 
     protected void initJournal() throws JournalException, InterruptedException {
+        // 阻塞队列，用于记录写元数据日志操作 Task
         BlockingQueue<JournalTask> journalQueue =
-                new ArrayBlockingQueue<JournalTask>(Config.metadata_journal_queue_size);
+                new ArrayBlockingQueue<>(Config.metadata_journal_queue_size);
+        // 封装针对 BDB 的操作
         journal = JournalFactory.create(nodeMgr.getNodeName());
+        // 消费 journalQueue 阻塞队列，异步将元数据日志写入 BDB
         journalWriter = new JournalWriter(journal, journalQueue);
 
+        // 封装对于元数据的修改操作为 JournalTask，并记录到 journalQueue 阻塞队列
         editLog = new EditLog(journalQueue);
     }
 
@@ -1265,6 +1271,7 @@ public class GlobalStateMgr {
         if (replayer != null) {
             replayer.setStop();
             try {
+                // 等待 replayer 线程停止完成
                 replayer.join();
             } catch (InterruptedException e) {
                 LOG.warn("got exception when stopping the replayer thread", e);
@@ -1275,13 +1282,14 @@ public class GlobalStateMgr {
         // set this after replay thread stopped. to avoid replay thread modify them.
         isReady.set(false);
 
-        // setup for journal
+        // setup for journal，打开并初始化 BDB
         try {
             journal.open();
             if (!haProtocol.fencing()) {
                 throw new Exception("fencing failed. will exit");
             }
             long maxJournalId = journal.getMaxJournalId();
+            // 重放元数据操作
             replayJournal(maxJournalId);
             nodeMgr.checkCurrentNodeExist();
             journalWriter.init(maxJournalId);
@@ -1291,6 +1299,7 @@ public class GlobalStateMgr {
             System.exit(-1);
         }
 
+        // 启动 JournalWriter 线程
         journalWriter.startDaemon();
 
         // Set the feType to LEADER before writing edit log, because the feType must be Leader when writing edit log.
@@ -1336,8 +1345,10 @@ public class GlobalStateMgr {
             }
 
             // start all daemon threads that only running on MASTER FE
+            // 启动 Leader 专属的后台线程
             startLeaderOnlyDaemonThreads();
             // start other daemon threads that should run on all FEs
+            // 启动需要在所有 FE 节点上运行的后台线程
             startAllNodeTypeDaemonThreads();
             insertOverwriteJobMgr.cancelRunningJobs();
 
@@ -1362,14 +1373,18 @@ public class GlobalStateMgr {
                 // configuration. If it is upgraded from an old version, the original
                 // configuration is retained to avoid system stability problems caused by
                 // changes in concurrency
-                VariableMgr.setSystemVariable(VariableMgr.getDefaultSessionVariable(), new SystemVariable(SetType.GLOBAL,
+                VariableMgr.setSystemVariable(
+                        VariableMgr.getDefaultSessionVariable(),
+                        new SystemVariable(SetType.GLOBAL,
                                 SessionVariable.ENABLE_ADAPTIVE_SINK_DOP,
                                 LiteralExpr.create("true", Type.BOOLEAN)),
                         false);
             }
             if (nodeMgr.isFirstTimeStartUp()) {
                 // When the cluster is initially deployed, we use persistent index by default
-                VariableMgr.setSystemVariable(VariableMgr.getDefaultSessionVariable(), new SystemVariable(SetType.GLOBAL,
+                VariableMgr.setSystemVariable(
+                        VariableMgr.getDefaultSessionVariable(),
+                        new SystemVariable(SetType.GLOBAL,
                                 SessionVariable.ENABLE_PERSISTENT_INDEX_BY_DEFAULT,
                                 LiteralExpr.create("true", Type.BOOLEAN)),
                         false);
@@ -1551,6 +1566,9 @@ public class GlobalStateMgr {
         }
     }
 
+    /**
+     * 加载元数据文件
+     */
     public void loadImage(String imageDir) throws IOException, DdlException {
         Storage storage = new Storage(imageDir);
         nodeMgr.setClusterId(storage.getClusterID());
@@ -1561,8 +1579,8 @@ public class GlobalStateMgr {
             return;
         }
         replayedJournalId.set(storage.getImageJournalId());
-        LOG.info("start load image from {}. is ckpt: {}", curFile.getAbsolutePath(),
-                GlobalStateMgr.isCheckpointThread());
+        LOG.info("start load image from {}. is ckpt: {}",
+                curFile.getAbsolutePath(), GlobalStateMgr.isCheckpointThread());
         long loadImageStartTime = System.currentTimeMillis();
         DataInputStream dis = new DataInputStream(new BufferedInputStream(Files.newInputStream(curFile.toPath())));
 
@@ -1574,7 +1592,7 @@ public class GlobalStateMgr {
 
             if (GlobalStateMgr.getCurrentStateStarRocksMetaVersion() >= StarRocksFEMetaVersion.VERSION_4) {
                 Map<SRMetaBlockID, SRMetaBlockLoader> loadImages = ImmutableMap.<SRMetaBlockID, SRMetaBlockLoader>builder()
-                        .put(SRMetaBlockID.NODE_MGR, nodeMgr::load)
+                        .put(SRMetaBlockID.NODE_MGR, nodeMgr::load) // Value 是一个函数式接口
                         .put(SRMetaBlockID.LOCAL_META_STORE, localMetastore::load)
                         .put(SRMetaBlockID.ALTER_MGR, alterJobMgr::load)
                         .put(SRMetaBlockID.CATALOG_RECYCLE_BIN, recycleBin::load)
@@ -1626,6 +1644,7 @@ public class GlobalStateMgr {
                                 continue;
                             }
 
+                            // 应用对应的元数据 load 函数
                             imageLoader.apply(reader);
                             metaMgrMustExists.remove(srMetaBlockID);
                             LOG.info("Success load StarRocks meta block " + srMetaBlockID + " from image");
@@ -2283,11 +2302,13 @@ public class GlobalStateMgr {
      * toJournalId is a definite number and cannot set to -1/JournalCursor.CURSOR_END_KEY
      */
     public void replayJournal(long toJournalId) throws JournalException {
+        // journal ID 已经被 replayed，直接跳过
         if (toJournalId <= replayedJournalId.get()) {
             LOG.info("skip replay journal because {} <= {}", toJournalId, replayedJournalId.get());
             return;
         }
 
+        // replay 起始 journal ID
         long startJournalId = replayedJournalId.get() + 1;
         long replayStartTime = System.currentTimeMillis();
         LOG.info("start to replay journal from {} to {}", startJournalId, toJournalId);
@@ -2295,6 +2316,7 @@ public class GlobalStateMgr {
         JournalCursor cursor = null;
         try {
             cursor = journal.read(startJournalId, toJournalId);
+            // 逐一重放元数据日志对应的操作
             replayJournalInner(cursor, false);
         } catch (InterruptedException | JournalInconsistentException e) {
             LOG.warn("got interrupt exception or inconsistent exception when replay journal {}, will exit, ",
@@ -2345,7 +2367,7 @@ public class GlobalStateMgr {
 
                 readSucc = true;
 
-                // apply
+                // apply，重放指定元数据日志对应的操作
                 EditLog.loadJournal(this, entity);
             } catch (Throwable e) {
                 if (canSkipBadReplayedJournal()) {
@@ -3412,7 +3434,7 @@ public class GlobalStateMgr {
         return shortKeyColumnCount;
     }
 
-    /*
+    /**
      * used for handling AlterTableStmt (for client is the ALTER TABLE command).
      * including SchemaChangeHandler and RollupHandler
      */

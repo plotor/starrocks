@@ -66,6 +66,7 @@ import com.starrocks.sql.ast.StatementBase;
 import com.starrocks.sql.ast.UserIdentity;
 import com.starrocks.sql.common.SqlDigestBuilder;
 import com.starrocks.sql.parser.ParsingException;
+import com.starrocks.sql.parser.SqlParser;
 import com.starrocks.thrift.TMasterOpRequest;
 import com.starrocks.thrift.TMasterOpResult;
 import com.starrocks.thrift.TQueryOptions;
@@ -323,14 +324,16 @@ public class ConnectProcessor {
     private void handleQuery() {
         MetricRepo.COUNTER_REQUEST_ALL.increase(1L);
         // convert statement to Java string
-        String originStmt = null;
+        String originStmt;
         byte[] bytes = packetBuf.array();
         int ending = packetBuf.limit() - 1;
         while (ending >= 1 && bytes[ending] == '\0') {
             ending--;
         }
+        // 解析得到原始的 SQL 文本
         originStmt = new String(bytes, 1, ending, StandardCharsets.UTF_8);
         ctx.getAuditEventBuilder().reset();
+        // 设置 Audit Event 基本信息
         ctx.getAuditEventBuilder()
                 .setTimestamp(System.currentTimeMillis())
                 .setClientIp(ctx.getMysqlChannel().getRemoteHostPortString())
@@ -342,16 +345,20 @@ public class ConnectProcessor {
         ctx.getPlannerProfile().reset();
 
         // execute this query.
-        StatementBase parsedStmt = null;
+        StatementBase parsedStmt;
         try {
             ctx.setQueryId(UUIDUtil.genUUID());
+            // 之所以返回一个 List，是考虑一次执行多条语句的场景
             List<StatementBase> stmts;
             try {
-                stmts = com.starrocks.sql.parser.SqlParser.parse(originStmt, ctx.getSessionVariable());
+                // 基于 Antlr 进行词法解析，语法解析
+                stmts = SqlParser.parse(originStmt, ctx.getSessionVariable());
+                LOG.info("Stmt size: {}, Input SQL:\n{}", stmts.size(), originStmt);
             } catch (ParsingException parsingException) {
                 throw new AnalysisException(parsingException.getMessage());
             }
 
+            // 逐个遍历执行 Stmt
             for (int i = 0; i < stmts.size(); ++i) {
                 ctx.getState().reset();
                 if (i > 0) {
@@ -367,11 +374,13 @@ public class ConnectProcessor {
                     addRunningQueryDetail(parsedStmt);
                 }
 
+                // 构造执行器 StmtExecutor
                 executor = new StmtExecutor(ctx, parsedStmt);
                 ctx.setExecutor(executor);
 
                 ctx.setIsLastStmt(i == stmts.size() - 1);
 
+                // 执行 Stmt
                 executor.execute();
 
                 // do not execute following stmt when current stmt failed, this is consistent with mysql server
@@ -412,7 +421,7 @@ public class ConnectProcessor {
         }
 
         addFinishedQueryDetail();
-    }
+    } // ~ handleQuery
 
     // Get the column definitions of a table
     private void handleFieldList() throws IOException {
@@ -763,9 +772,9 @@ public class ConnectProcessor {
             return;
         }
 
-        // dispatch
+        // dispatch，按照 MySQL 指令类型分别派发给对应的 handle 方法处理
         dispatch();
-        // finalize
+        // finalize，封装执行结果发送给客户端
         finalizeCommand();
 
         ctx.setCommand(MysqlCommand.COM_SLEEP);

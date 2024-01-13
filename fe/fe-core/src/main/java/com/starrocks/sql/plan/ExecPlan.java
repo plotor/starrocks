@@ -38,6 +38,7 @@ import java.util.Map;
 import java.util.UUID;
 
 public class ExecPlan {
+
     private final ConnectContext connectContext;
     private final List<String> colNames;
     private final List<ScanNode> scanNodes = new ArrayList<>();
@@ -66,8 +67,10 @@ public class ExecPlan {
         outputColumns = new ArrayList<>();
     }
 
-    public ExecPlan(ConnectContext connectContext, List<String> colNames,
-                    OptExpression physicalPlan, List<ColumnRefOperator> outputColumns) {
+    public ExecPlan(ConnectContext connectContext,
+                    List<String> colNames,
+                    OptExpression physicalPlan,
+                    List<ColumnRefOperator> outputColumns) {
         this.connectContext = connectContext;
         this.colNames = colNames;
         this.physicalPlan = physicalPlan;

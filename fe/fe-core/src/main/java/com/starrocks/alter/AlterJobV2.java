@@ -183,6 +183,7 @@ public abstract class AlterJobV2 implements Writable {
             return;
         }
 
+        LOG.info("Run alter job {} with state {}", jobId, jobState);
         try {
             while (true) {
                 JobState prevState = jobState;

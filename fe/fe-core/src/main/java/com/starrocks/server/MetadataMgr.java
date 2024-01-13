@@ -112,6 +112,7 @@ public class MetadataMgr {
         if (Strings.isNullOrEmpty(catalogName)) {
             catalogName = InternalCatalog.DEFAULT_INTERNAL_CATALOG_NAME;
         }
+        // 内表，直接返回 LocalMetastore
         if (CatalogMgr.isInternalCatalog(catalogName)) {
             return Optional.of(localMetastore);
         } else {
@@ -121,6 +122,7 @@ public class MetadataMgr {
                 QueryMetadatas queryMetadatas = metadataCacheByQueryId.getUnchecked(queryId);
                 return Optional.ofNullable(queryMetadatas.getConnectorMetadata(catalogName, queryId));
             } else {
+                // 外表
                 Connector connector = connectorMgr.getConnector(catalogName);
                 if (connector == null) {
                     LOG.error("Failed to get {} catalog", catalogName);
@@ -205,9 +207,11 @@ public class MetadataMgr {
 
     public boolean createTable(CreateTableStmt stmt) throws DdlException {
         String catalogName = stmt.getCatalogName();
+        // 按照 Catalog 获取对应的 MetadataStore，区分内表、外表
         Optional<ConnectorMetadata> connectorMetadata = getOptionalMetadata(catalogName);
 
         if (connectorMetadata.isPresent()) {
+            // 外表
             if (!CatalogMgr.isInternalCatalog(catalogName)) {
                 String dbName = stmt.getDbName();
                 String tableName = stmt.getTableName();
@@ -224,6 +228,7 @@ public class MetadataMgr {
                     }
                 }
             }
+            // 内表
             return connectorMetadata.get().createTable(stmt);
         } else {
             throw new  DdlException("Invalid catalog " + catalogName + " , ConnectorMetadata doesn't exist");

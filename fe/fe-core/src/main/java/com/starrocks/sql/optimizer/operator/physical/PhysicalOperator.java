@@ -24,7 +24,9 @@ import com.starrocks.sql.optimizer.operator.OperatorType;
 import java.util.Set;
 
 public abstract class PhysicalOperator extends Operator {
+    /* 描述数据排序 */
     protected OrderSpec orderSpec;
+    /* 描述数据分布 */
     protected DistributionSpec distributionSpec;
 
     protected PhysicalOperator(OperatorType type) {

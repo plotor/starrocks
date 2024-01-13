@@ -56,6 +56,7 @@ import com.starrocks.sql.ast.SelectRelation;
 import com.starrocks.sql.ast.StatementBase;
 import com.starrocks.sql.ast.SubqueryRelation;
 import com.starrocks.sql.ast.TableRelation;
+import com.starrocks.sql.parser.SqlParser;
 import com.starrocks.sql.plan.ExecPlan;
 import com.starrocks.thrift.TDataSink;
 import com.starrocks.thrift.TDataSinkType;
@@ -193,7 +194,10 @@ public class TableQueryPlanAction extends RestBaseAction {
      * @return
      * @throws StarRocksHttpException
      */
-    private void handleQuery(ConnectContext context, String requestDb, String requestTable, String sql,
+    private void handleQuery(ConnectContext context,
+                             String requestDb,
+                             String requestTable,
+                             String sql,
                              Map<String, Object> result) {
         StatementBase statementBase;
         ExecPlan execPlan;
@@ -203,9 +207,8 @@ public class TableQueryPlanAction extends RestBaseAction {
              * currently only used in Spark/Flink Connector
              */
             context.getSessionVariable().setSingleNodeExecPlan(true);
-            statementBase =
-                    com.starrocks.sql.parser.SqlParser.parse(sql, context.getSessionVariable()).get(0);
-            execPlan = new StatementPlanner().plan(statementBase, context);
+            statementBase = SqlParser.parse(sql, context.getSessionVariable()).get(0);
+            execPlan = StatementPlanner.plan(statementBase, context);
             context.getSessionVariable().setSingleNodeExecPlan(false);
         } catch (Exception e) {
             LOG.error("error occurred when optimizing queryId: {}", context.getQueryId(), e);

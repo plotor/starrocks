@@ -55,12 +55,14 @@ import org.apache.logging.log4j.Logger;
 import java.util.ArrayList;
 import java.util.List;
 
-/*
+/**
  * This is the bdb implementation of Journal interface.
  * First, we open() this journal, then read from or write to the bdb environment
  * We can also get journal id information by calling getXXXId functions.
  * Finally, close this journal.
  * This class encapsulates the read, write APIs of bdbje
+ * <p>
+ * 这个类封装了针对 bdbje 的操作，实际持久化会回放数据是通过 EditLog 和调用 BDBJEJournal 来实现的
  */
 public class BDBJEJournal implements Journal {
     public static final Logger LOG = LogManager.getLogger(BDBJEJournal.class);
@@ -310,8 +312,8 @@ public class BDBJEJournal implements Journal {
                     Thread.sleep(SLEEP_INTERVAL_SEC * 1000L);
                 }
 
-                currentTransaction = currentJournalDB.getDb().getEnvironment().beginTransaction(
-                        null, bdbEnvironment.getTxnConfig());
+                currentTransaction = currentJournalDB.getDb().getEnvironment()
+                        .beginTransaction(null, bdbEnvironment.getTxnConfig());
                 return;
             } catch (DatabaseException e) {
                 String errMsg = String.format("failed to begin txn after retried %d times! db = %s",

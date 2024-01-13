@@ -54,6 +54,7 @@ public class GroupExpression {
     // will set by setGroup method
     private Group group;
     private final List<Group> inputs;
+    /* 表示 */
     private final Operator op;
     private final BitSet ruleMasks = new BitSet(RuleType.NUM_RULES.ordinal() + 1);
     private final BitSet appliedRuleMasks = new BitSet(RuleType.NUM_RULES.ordinal() + 1);

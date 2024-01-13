@@ -973,8 +973,8 @@ public class SystemInfoService implements GsonPostProcessable {
     public void updateBackendReportVersion(long backendId, long newReportVersion, long dbId) {
         ComputeNode node = getBackendOrComputeNode(backendId);
         // only backend need to report version
-        if (node != null && (node instanceof Backend)) {
-            AtomicLong atomicLong = null;
+        if (node instanceof Backend) {
+            AtomicLong atomicLong;
             if ((atomicLong = idToReportVersionRef.get(backendId)) != null) {
                 Database db = GlobalStateMgr.getCurrentState().getDb(dbId);
                 if (db != null) {
@@ -1231,13 +1231,16 @@ public class SystemInfoService implements GsonPostProcessable {
         memoryBe.setDecommissionType(be.getDecommissionType());
     }
 
+    /**
+     * 获取所有 BE 可用的磁盘总量
+     */
     public long getClusterAvailableCapacityB() {
         List<Backend> clusterBackends = getBackends();
         long capacity = 0L;
         for (Backend backend : clusterBackends) {
             // Here we do not check if backend is alive,
             // We suppose the dead backends will back to alive later.
-            if (backend.isDecommissioned()) {
+            if (backend.isDecommissioned()) { // 正在下线
                 // Data on decommissioned backend will move to other backends,
                 // So we need to minus size of those data.
                 capacity -= backend.getDataUsedCapacityB();
@@ -1258,7 +1261,7 @@ public class SystemInfoService implements GsonPostProcessable {
         }
     }
 
-    /*
+    /**
      * Try to randomly get a backend id by given host.
      * If not found, return -1
      */

@@ -2124,6 +2124,9 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true)
     public static boolean enable_routine_load_lag_metrics = false;
 
+    /**
+     * 是否收集查询的 Profile 信息
+     */
     @ConfField(mutable = true)
     public static boolean enable_collect_query_detail_info = false;
 

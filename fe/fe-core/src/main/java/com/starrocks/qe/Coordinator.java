@@ -231,7 +231,7 @@ public class Coordinator {
     public Coordinator(StreamLoadPlanner planner, TNetworkAddress address) {
         TExecPlanFragmentParams params = planner.getExecPlanFragmentParams();
         queryId = params.getParams().getFragment_instance_id();
-        LOG.info("Execution Profile " + DebugUtil.printId(queryId));
+        LOG.info("Execution Profile {}", DebugUtil.printId(queryId));
         queryProfile = new RuntimeProfile("Execution");
 
         fragmentProfiles = new ArrayList<>();
@@ -264,13 +264,18 @@ public class Coordinator {
     }
 
     // Used for new planner
-    public Coordinator(ConnectContext context, List<PlanFragment> fragments, List<ScanNode> scanNodes,
+    public Coordinator(ConnectContext context,
+                       List<PlanFragment> fragments,
+                       List<ScanNode> scanNodes,
                        TDescriptorTable descTable) {
         this(context, fragments, scanNodes, descTable, TQueryType.SELECT);
     }
 
-    public Coordinator(ConnectContext context, List<PlanFragment> fragments, List<ScanNode> scanNodes,
-                       TDescriptorTable descTable, TQueryType queryType) {
+    public Coordinator(ConnectContext context,
+                       List<PlanFragment> fragments,
+                       List<ScanNode> scanNodes,
+                       TDescriptorTable descTable,
+                       TQueryType queryType) {
         this.isBlockQuery = false;
         this.queryId = context.getExecutionId();
         this.connectContext = context;
@@ -282,16 +287,16 @@ public class Coordinator {
         this.queryOptions.setQuery_type(queryType);
         long startTime = context.getStartTime();
         String timezone = context.getSessionVariable().getTimeZone();
-        this.queryGlobals = CoordinatorPreprocessor.genQueryGlobals(Instant.ofEpochMilli(startTime), timezone);
+        this.queryGlobals = CoordinatorPreprocessor
+                .genQueryGlobals(Instant.ofEpochMilli(startTime), timezone);
         if (context.getLastQueryId() != null) {
             this.queryGlobals.setLast_query_id(context.getLastQueryId().toString());
         }
-        this.needReport = context.getSessionVariable().isEnableProfile() ||
-                context.getSessionVariable().isEnableBigQueryProfile();
+        this.needReport = context.getSessionVariable().isEnableProfile()
+                || context.getSessionVariable().isEnableBigQueryProfile();
 
-        this.coordinatorPreprocessor =
-                new CoordinatorPreprocessor(queryId, context, fragments, scanNodes, descTable, queryGlobals,
-                        queryOptions);
+        this.coordinatorPreprocessor = new CoordinatorPreprocessor(
+                queryId, context, fragments, scanNodes, descTable, queryGlobals, queryOptions);
         this.isStatisticsJob = context.isStatisticsJob();
         this.needQueued = context.isNeedQueued();
     }
@@ -596,11 +601,16 @@ public class Coordinator {
                     DebugUtil.printId(queryId), descTable);
         }
 
+        /*
+         * 1. 计算各个 Fragment 需要多少执行实例，以及在哪些节点上执行
+         * 2. 构建 Fragment 执行实例之间的依赖关系
+         */
         coordinatorPreprocessor.prepareExec();
 
-        // create result receiver
+        // 构建 ResultReceiver
         prepareResultSink();
 
+        // 初始化 Query Profile
         prepareProfile();
     }
 
@@ -629,18 +639,28 @@ public class Coordinator {
     }
 
     public void exec() throws Exception {
+        // 查询队列
         try (PlannerProfile.ScopedTimer timer = PlannerProfile.getScopedTimer("Scheduler.Pending")) {
             QueryQueueManager.getInstance().maybeWait(connectContext, this);
         }
 
-        if (slot != null && slot.getPipelineDop() > 0 && slot.getPipelineDop() != getQueryOptions().getPipeline_dop()) {
+        // 为每个 Fragment 设置最大的 pipeline 并行度
+        if (slot != null
+                && slot.getPipelineDop() > 0
+                && slot.getPipelineDop() != getQueryOptions().getPipeline_dop()) {
             fragments.forEach(fragment -> fragment.limitMaxPipelineDop(slot.getPipelineDop()));
         }
 
         try (PlannerProfile.ScopedTimer timer = PlannerProfile.getScopedTimer("Scheduler.Prepare")) {
+            /*
+             * 1. 计算各个 Fragment 需要多少执行实例，以及在哪些节点上执行
+             * 2. 构建 Fragment 执行实例之间的依赖关系
+             * 3. 构建 ResultReceiver
+             */
             prepareExec();
         }
 
+        // 将 Fragment 批量发送给对应的 BE 节点执行
         try (PlannerProfile.ScopedTimer timer = PlannerProfile.getScopedTimer("Scheduler.Deploy")) {
             deliverExecFragments();
         }
@@ -683,15 +703,15 @@ public class Coordinator {
 
 
             if (LOG.isDebugEnabled()) {
-                LOG.debug("dispatch query job: {} to {}", DebugUtil.printId(queryId),
-                        topParams.instanceExecParams.get(0).host);
+                LOG.debug("dispatch query job: {} to {}",
+                        DebugUtil.printId(queryId), topParams.instanceExecParams.get(0).host);
             }
 
             // set the broker address for OUTFILE sink
             ResultSink resultSink = (ResultSink) topParams.fragment.getSink();
             if (resultSink.isOutputFileSink() && resultSink.needBroker()) {
-                FsBroker broker = GlobalStateMgr.getCurrentState().getBrokerMgr().getBroker(resultSink.getBrokerName(),
-                        execBeAddr.getHostname());
+                FsBroker broker = GlobalStateMgr.getCurrentState().getBrokerMgr()
+                        .getBroker(resultSink.getBrokerName(), execBeAddr.getHostname());
                 resultSink.setBrokerAddr(broker.ip, broker.port);
                 LOG.info("OUTFILE through broker: {}:{}", broker.ip, broker.port);
             }
@@ -703,18 +723,16 @@ public class Coordinator {
             loadCounters = Maps.newHashMap();
             List<Long> relatedBackendIds = Lists.newArrayList(coordinatorPreprocessor.getAddressToBackendID().values());
             GlobalStateMgr.getCurrentState().getLoadMgr()
-                    .initJobProgress(jobId, queryId, coordinatorPreprocessor.getInstanceIds(),
-                            relatedBackendIds);
-            LOG.info("dispatch load job: {} to {}", DebugUtil.printId(queryId),
-                    coordinatorPreprocessor.getAddressToBackendID().keySet());
+                    .initJobProgress(jobId, queryId, coordinatorPreprocessor.getInstanceIds(), relatedBackendIds);
+            LOG.info("dispatch load job: {} to {}",
+                    DebugUtil.printId(queryId), coordinatorPreprocessor.getAddressToBackendID().keySet());
         }
     }
 
     private void deliverExecFragments() throws Exception {
-        // Only pipeline uses deliver_batch_fragments.
-        boolean enableDeliverBatchFragments =
-                coordinatorPreprocessor.isUsePipeline() &&
-                        connectContext.getSessionVariable().isEnableDeliverBatchFragments();
+        // Only pipeline uses deliver_batch_fragments. 默认为 true
+        boolean enableDeliverBatchFragments = coordinatorPreprocessor.isUsePipeline()
+                && connectContext.getSessionVariable().isEnableDeliverBatchFragments();
 
         if (enableDeliverBatchFragments) {
             deliverExecBatchFragmentsRequests(coordinatorPreprocessor.isUsePipeline());
@@ -723,7 +741,8 @@ public class Coordinator {
         }
     }
 
-    private void handleErrorBackendExecState(BackendExecState errorBackendExecState, TStatusCode errorCode,
+    private void handleErrorBackendExecState(BackendExecState errorBackendExecState,
+                                             TStatusCode errorCode,
                                              String errMessage)
             throws UserException, RpcException {
         if (errorBackendExecState != null) {
@@ -767,12 +786,13 @@ public class Coordinator {
                 // Fragment instances to keep consistent order with Fragment instances in
                 // FragmentExecParams.instanceExecParams.
                 for (CoordinatorPreprocessor.FInstanceExecParam fInstanceExecParam : params.instanceExecParams) {
-                    fInstanceExecParam.backendNum = backendId++;
+                    fInstanceExecParam.backendNum = backendId++; // 递增执行的 BE 节点数
                 }
-                Map<Boolean, List<CoordinatorPreprocessor.FInstanceExecParam>> instanceSplits = 
-                        params.instanceExecParams.stream()
-                                .collect(Collectors.partitioningBy(
-                                        CoordinatorPreprocessor.FInstanceExecParam::isRuntimeFilterCoordinator));
+                Map<Boolean, List<CoordinatorPreprocessor.FInstanceExecParam>> instanceSplits =
+                        params.instanceExecParams.stream().collect(
+                                Collectors.partitioningBy(
+                                        CoordinatorPreprocessor.FInstanceExecParam::isRuntimeFilterCoordinator)
+                        );
                 threeStageExecParamList.get(0).addAll(instanceSplits.get(true));
                 List<CoordinatorPreprocessor.FInstanceExecParam> restInstances = instanceSplits.get(false);
                 if (enablePipelineEngine) {
@@ -791,8 +811,8 @@ public class Coordinator {
 
                 // if pipeline is enable and current fragment contain olap table sink, in fe we will 
                 // calculate the number of all tablet sinks in advance and assign them to each fragment instance
-                boolean enablePipelineTableSinkDop = enablePipelineEngine &&
-                        (fragment.hasOlapTableSink() || fragment.hasIcebergTableSink());
+                boolean enablePipelineTableSinkDop = enablePipelineEngine
+                        && (fragment.hasOlapTableSink() || fragment.hasIcebergTableSink());
                 boolean forceSetTableSinkDop = fragment.forceSetTableSinkDop();
                 int tabletSinkTotalDop = 0;
                 int accTabletSinkDop = 0;
@@ -827,11 +847,16 @@ public class Coordinator {
                         continue;
                     }
 
-                    Map<TUniqueId, TNetworkAddress> instanceId2Host =
-                            fInstanceExecParamList.stream().collect(Collectors.toMap(f -> f.instanceId, f -> f.host));
-                    List<TExecPlanFragmentParams> tParams =
-                            params.toThrift(instanceId2Host.keySet(), descTable, enablePipelineEngine,
-                                    accTabletSinkDop, tabletSinkTotalDop, false);
+                    Map<TUniqueId, TNetworkAddress> instanceId2Host = fInstanceExecParamList.stream()
+                            .collect(Collectors.toMap(f -> f.instanceId, f -> f.host));
+                    List<TExecPlanFragmentParams> tParams = params.toThrift(
+                            instanceId2Host.keySet(),
+                            descTable,
+                            enablePipelineEngine,
+                            accTabletSinkDop,
+                            tabletSinkTotalDop,
+                            false
+                    );
                     if (enablePipelineTableSinkDop) {
                         for (CoordinatorPreprocessor.FInstanceExecParam instanceExecParam : fInstanceExecParamList) {
                             if (!forceSetTableSinkDop) {
@@ -847,19 +872,22 @@ public class Coordinator {
                     // we should add all BackendExecState of this fragment to needCheckBackendExecStates,
                     // so that we can check these backends' state when joining this Coordinator
                     boolean needCheckBackendState = isLoadType() && profileFragmentId == 0;
-
                     for (TExecPlanFragmentParams tParam : tParams) {
                         // TODO: pool of pre-formatted BackendExecStates?
                         TNetworkAddress host = instanceId2Host.get(tParam.params.fragment_instance_id);
-                        BackendExecState execState = new BackendExecState(fragment.getFragmentId(), host,
-                                profileFragmentId, tParam, coordinatorPreprocessor.getAddressToBackendID());
+                        BackendExecState execState = new BackendExecState(
+                                fragment.getFragmentId(),
+                                host,
+                                profileFragmentId,
+                                tParam,
+                                coordinatorPreprocessor.getAddressToBackendID()
+                        );
                         backendExecStates.put(tParam.backend_num, execState);
                         if (needCheckBackendState) {
                             needCheckBackendExecStates.add(execState);
                             if (LOG.isDebugEnabled()) {
                                 LOG.debug("add need check backend {} for fragment, {} job: {}",
-                                        execState.backend.getId(),
-                                        fragment.getFragmentId().asInt(), jobId);
+                                        execState.backend.getId(), fragment.getFragmentId().asInt(), jobId);
                             }
                         }
                         futures.add(Pair.create(execState, execState.execRemoteFragmentAsync()));
@@ -872,8 +900,7 @@ public class Coordinator {
                         TStatusCode code;
                         String errMsg = null;
                         try {
-                            PExecPlanFragmentResult result =
-                                    pair.second.get(queryDeliveryTimeoutMs, TimeUnit.MILLISECONDS);
+                            PExecPlanFragmentResult result = pair.second.get(queryDeliveryTimeoutMs, TimeUnit.MILLISECONDS);
                             code = TStatusCode.findByValue(result.status.statusCode);
                             if (result.status.errorMsgs != null && !result.status.errorMsgs.isEmpty()) {
                                 errMsg = result.status.errorMsgs.get(0);
@@ -895,8 +922,7 @@ public class Coordinator {
                             }
                             queryStatus.setStatus(errMsg + " backend:" + pair.first.address.hostname);
                             LOG.warn("exec plan fragment failed, errmsg={}, code: {}, fragmentId={}, backend={}:{}",
-                                    errMsg, code, fragment.getFragmentId(),
-                                    pair.first.address.hostname, pair.first.address.port);
+                                    errMsg, code, fragment.getFragmentId(), pair.first.address.hostname, pair.first.address.port);
                             if (errorBackendExecState == null) {
                                 errorBackendExecState = pair.first;
                                 errorCode = code;
@@ -2149,6 +2175,7 @@ public class Coordinator {
     public ConnectContext getConnectContext() {
         return connectContext;
     }
+
     // record backend execute state
     // TODO(zhaochun): add profile information and others
     public class BackendExecState {
@@ -2288,7 +2315,9 @@ public class Coordinator {
             }
             this.initiated = true;
             try {
-                return BackendServiceClient.getInstance().execPlanFragmentAsync(brpcAddress, uniqueRpcParams);
+                LOG.info("Send plan fragment request to backend {}", brpcAddress);
+                return BackendServiceClient.getInstance()
+                        .execPlanFragmentAsync(brpcAddress, uniqueRpcParams);
             } catch (RpcException e) {
                 // DO NOT throw exception here, return a complete future with error code,
                 // so that the following logic will cancel the fragment.

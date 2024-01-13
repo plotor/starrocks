@@ -61,6 +61,7 @@ import org.jetbrains.annotations.NotNull;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -208,8 +209,9 @@ public class MvRewritePreprocessor {
         if (context.getOptimizerConfig().isRuleBased()) {
             return;
         }
+
         try (PlannerProfile.ScopedTimer ignored = PlannerProfile.getScopedTimer("Optimizer.preprocessMvs")) {
-            Set<Table> queryTables = MvUtils.getAllTables(queryOptExpression).stream().collect(Collectors.toSet());
+            Set<Table> queryTables = new HashSet<>(MvUtils.getAllTables(queryOptExpression));
             logMVParams(connectContext, queryTables);
 
             try {
@@ -589,8 +591,7 @@ public class MvRewritePreprocessor {
         List<String> candidateMvNames = context.getCandidateMvs().stream()
                 .map(materializationContext -> materializationContext.getMv().getName()).collect(Collectors.toList());
 
-        logMVPrepare(connectContext, "RelatedMVs: {}, CandidateMVs: {}", relatedMvNames,
-                candidateMvNames);
+        logMVPrepare(connectContext, "RelatedMVs: {}, CandidateMVs: {}", relatedMvNames,                candidateMvNames);
     }
 
     private void preprocessMv(MaterializedView mv, MvPlanContext mvPlanContext,
