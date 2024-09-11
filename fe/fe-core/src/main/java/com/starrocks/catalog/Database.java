@@ -116,6 +116,7 @@ public class Database extends MetaObject implements Writable {
     // catalogName is set if the database comes from an external catalog
     private String catalogName;
 
+    /* 可重入读写锁 */
     private QueryableReentrantReadWriteLock rwLock;
 
     private long lastSlowLockLogTime = 0;

@@ -25,11 +25,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-/*
+/**
  * This Lock is for exposing the getOwner() method,
  * which is a protected method of ReentrantReadWriteLock
  */
 public class QueryableReentrantReadWriteLock extends ReentrantReadWriteLock {
+
+    /* 本质上是可重入读写锁，会记录每个线程获取锁的时间戳 */
+
     // threadId -> lockTime
     Map<Long, Long> sharedLockThreads = new ConcurrentHashMap<>();
 
@@ -41,6 +44,7 @@ public class QueryableReentrantReadWriteLock extends ReentrantReadWriteLock {
 
     public void sharedLock() {
         this.readLock().lock();
+        // 当前获取锁的线程，以及获取锁的时间戳
         this.sharedLockThreads.put(Thread.currentThread().getId(), System.currentTimeMillis());
     }
 
