@@ -92,12 +92,20 @@ public class StatementPlanner {
         return plan(stmt, session, TResultSinkType.MYSQL_PROTOCAL);
     }
 
-    public static ExecPlan plan(StatementBase stmt, ConnectContext session,
+    /**
+     * 1. 基于 AST 对 SQL 进行语义分析
+     * 2. 基于 AST 生成 LogicalPlan
+     * 3. 基于 RBO + CBO 对 LogicalPlan 进行优化，并生成最优的 PhysicalPlan
+     * 4. 将 PhysicalPlan 转换成可执行的 ExecPlan
+     */
+    public static ExecPlan plan(StatementBase stmt,
+                                ConnectContext session,
                                 TResultSinkType resultSinkType) {
         if (stmt instanceof QueryStatement) {
             OptimizerTraceUtil.logQueryStatement("after parse:\n%s", (QueryStatement) stmt);
         } else if (stmt instanceof DmlStmt) {
             try {
+                // 开始事务，核心是执行 GlobalTransactionMgr.beginTransaction
                 beginTransaction((DmlStmt) stmt, session);
             } catch (RunningTxnExceedException | LabelAlreadyUsedException | DuplicatedRequestException | AnalysisException |
                      BeginTransactionException e) {
@@ -109,10 +117,10 @@ public class StatementPlanner {
         // 1. For all queries, we need db lock when analyze phase
         PlannerMetaLocker plannerMetaLocker = new PlannerMetaLocker(session, stmt);
         try (var guard = session.bindScope()) {
-            // Analyze
+            // 1. Analyzer 阶段：执行语法和语义解析
             analyzeStatement(stmt, session, plannerMetaLocker);
 
-            // Authorization check
+            // 2. 执行访问权限校验
             Authorizer.check(stmt, session);
             if (stmt instanceof QueryStatement) {
                 OptimizerTraceUtil.logQueryStatement("after analyze:\n%s", (QueryStatement) stmt);
@@ -124,6 +132,11 @@ public class StatementPlanner {
                 resultSinkType = queryStmt.hasOutFileClause() ? TResultSinkType.FILE : resultSinkType;
                 boolean areTablesCopySafe = AnalyzerUtils.areTablesCopySafe(queryStmt);
                 needWholePhaseLock = isLockFree(areTablesCopySafe, session) ? false : true;
+                /*
+                 * 3. Transformer 阶段：生成 LogicalPlan
+                 * 4. Optimizer 阶段：进行 CBO + RBO 优化，输出一个最优的 PhysicalPlan
+                 * 5. ExecPlanBuild 阶段：将 PhysicalPlan 转换成 ExecPlan
+                 */
                 ExecPlan plan;
                 if (needWholePhaseLock) {
                     plan = createQueryPlan(queryStmt, session, resultSinkType);
@@ -131,7 +144,7 @@ public class StatementPlanner {
                     long planStartTime = OptimisticVersion.generate();
                     unLock(plannerMetaLocker);
                     plan = createQueryPlanWithReTry(queryStmt, session, resultSinkType, plannerMetaLocker,
-                                                    planStartTime);
+                            planStartTime);
                 }
                 setOutfileSink(queryStmt, plan);
                 return plan;
@@ -229,17 +242,19 @@ public class StatementPlanner {
                                             ConnectContext session,
                                             TResultSinkType resultSinkType) {
         QueryStatement queryStmt = (QueryStatement) stmt;
-        QueryRelation query = (QueryRelation) queryStmt.getQueryRelation();
+        String sql = queryStmt.getOrigStmt().getOrigStmt();
+        QueryRelation query = queryStmt.getQueryRelation();
         List<String> colNames = query.getColumnOutputNames();
-        // 1. Build Logical plan
+        // 1. Build Logical plan，生成逻辑执行计划
         ColumnRefFactory columnRefFactory = new ColumnRefFactory();
         LogicalPlan logicalPlan;
-        MVTransformerContext mvTransformerContext  = makeMVTransformerContext(session.getSessionVariable());
+        MVTransformerContext mvTransformerContext = makeMVTransformerContext(session.getSessionVariable());
 
         try (Timer ignored = Tracers.watchScope("Transformer")) {
             // get a logicalPlan without inlining views
             TransformerContext transformerContext = new TransformerContext(columnRefFactory, session, mvTransformerContext);
             logicalPlan = new RelationTransformer(transformerContext).transformWithSelectLimit(query);
+            LOG.info("SQL:\n{},\nLogicalPlan:\n{}", sql, logicalPlan.getRoot().debugString());
         }
 
         OptExpression root = ShortCircuitPlanner.checkSupportShortCircuitRead(logicalPlan.getRoot(), session);
@@ -247,6 +262,7 @@ public class StatementPlanner {
         OptExpression optimizedPlan;
         try (Timer ignored = Tracers.watchScope("Optimizer")) {
             // 2. Optimize logical plan and build physical plan
+            // 对逻辑执行计划进行 RBO + CBO 优化得到最优的物理执行计划
             Optimizer optimizer = new Optimizer();
             optimizedPlan = optimizer.optimize(
                     session,
@@ -259,7 +275,7 @@ public class StatementPlanner {
         }
 
         try (Timer ignored = Tracers.watchScope("ExecPlanBuild")) {
-            // 3. Build fragment exec plan
+            // 3. Build fragment exec plan，生成 PlanFragment 物理执行计划
             /*
              * SingleNodeExecPlan is set in TableQueryPlanAction to generate a single-node Plan,
              * currently only used in Spark/Flink Connector
@@ -280,10 +296,10 @@ public class StatementPlanner {
                                                     TResultSinkType resultSinkType,
                                                     PlannerMetaLocker plannerMetaLocker,
                                                     long planStartTime) {
+        String sql = queryStmt.getOrigStmt().getOrigStmt();
         QueryRelation query = queryStmt.getQueryRelation();
         List<String> colNames = query.getColumnOutputNames();
 
-        // 1. Build Logical plan
         ColumnRefFactory columnRefFactory = new ColumnRefFactory();
         boolean isSchemaValid = true;
 
@@ -299,12 +315,14 @@ public class StatementPlanner {
                 isSchemaValid = true;
             }
 
+            // 1. Build Logical plan，生成逻辑执行计划
             LogicalPlan logicalPlan;
             MVTransformerContext mvTransformerContext = makeMVTransformerContext(session.getSessionVariable());
             try (Timer ignored = Tracers.watchScope("Transformer")) {
                 // get a logicalPlan without inlining views
                 TransformerContext transformerContext = new TransformerContext(columnRefFactory, session, mvTransformerContext);
                 logicalPlan = new RelationTransformer(transformerContext).transformWithSelectLimit(query);
+                LOG.info("SQL:\n{},\nLogicalPlan:\n{}", sql, logicalPlan.getRoot().debugString());
             }
 
             OptExpression root = ShortCircuitPlanner.checkSupportShortCircuitRead(logicalPlan.getRoot(), session);
@@ -312,12 +330,15 @@ public class StatementPlanner {
             OptExpression optimizedPlan;
             try (Timer ignored = Tracers.watchScope("Optimizer")) {
                 // 2. Optimize logical plan and build physical plan
+                // 对逻辑执行计划进行 RBO + CBO 优化得到最优的物理执行计划
                 Optimizer optimizer = new Optimizer();
                 // FIXME: refactor this into Optimizer.optimize() method.
                 // set query tables into OptimizeContext so can be added for mv rewrite
                 if (Config.skip_whole_phase_lock_mv_limit >= 0) {
                     optimizer.setQueryTables(olapTables);
                 }
+
+                // 默认基于 RBO + CBO 对 LogicalPlan 进行优化
                 optimizedPlan = optimizer.optimize(
                         session,
                         root,
@@ -326,10 +347,11 @@ public class StatementPlanner {
                         new PhysicalPropertySet(),
                         new ColumnRefSet(logicalPlan.getOutputColumn()),
                         columnRefFactory);
+                LOG.info("SQL:\n{},\nOptimized LogicalPlan:\n{}", sql, optimizedPlan.debugString());
             }
 
             try (Timer ignored = Tracers.watchScope("ExecPlanBuild")) {
-                // 3. Build fragment exec plan
+                // 3. Build fragment exec plan，生成 PlanFragment 物理执行计划
                 // SingleNodeExecPlan is set in TableQueryPlanAction to generate a single-node Plan,
                 // currently only used in Spark/Flink Connector
                 // Because the connector sends only simple queries, it only needs to remove the output fragment
@@ -337,6 +359,7 @@ public class StatementPlanner {
                         optimizedPlan, session, logicalPlan.getOutputColumn(), columnRefFactory, colNames,
                         resultSinkType,
                         !session.getSessionVariable().isSingleNodeExecPlan());
+                LOG.info("SQL:\n{},\nExecPlan:\n{}", sql, plan.getExplainString(StatementBase.ExplainLevel.VERBOSE));
                 final long finalPlanStartTime = planStartTime;
                 isSchemaValid = olapTables.stream().allMatch(t -> OptimisticVersion.validateTableUpdate(t,
                         finalPlanStartTime));
@@ -426,7 +449,9 @@ public class StatementPlanner {
         if (stmt.isExplain() && !StatementBase.ExplainLevel.ANALYZE.equals(stmt.getExplainLevel())) {
             return;
         }
+
         if (stmt instanceof InsertStmt) {
+            // INSERT INTO FILES(..)
             if (((InsertStmt) stmt).useTableFunctionAsTargetTable() ||
                     ((InsertStmt) stmt).useBlackHoleTableAsTargetTable()) {
                 return;
@@ -453,6 +478,7 @@ public class StatementPlanner {
             return;
         }
 
+        // 构造 label，例如 insert_${query_id}
         String label;
         if (stmt instanceof InsertStmt) {
             String stmtLabel = ((InsertStmt) stmt).getLabel();

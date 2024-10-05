@@ -111,6 +111,7 @@ public class LeaderOpExecutor {
     }
 
     public void execute() throws Exception {
+        // 构造 Thrift 请求，并发送给 Leader 节点，阻塞等待
         forward();
         LOG.info("forwarding to master get result max journal id: {}", result.maxJournalId);
         ctx.getGlobalStateMgr().getJournalObservable().waitOn(result.maxJournalId, waitTimeoutMs);
@@ -131,6 +132,7 @@ public class LeaderOpExecutor {
         if (result.isSetResource_group_name()) {
             ctx.getAuditEventBuilder().setResourceGroup(result.getResource_group_name());
         }
+
         if (result.isSetAudit_statistics()) {
             TAuditStatistics tAuditStatistics = result.getAudit_statistics();
             if (ctx.getExecutor() != null) {
@@ -167,6 +169,7 @@ public class LeaderOpExecutor {
 
     // Send request to Leader
     private void forward() throws Exception {
+        // 递增并校验路由转发次数
         int forwardTimes = ctx.getForwardTimes() + 1;
         if (forwardTimes > 1) {
             LOG.info("forward multi times: {}", forwardTimes);
@@ -180,6 +183,7 @@ public class LeaderOpExecutor {
         TMasterOpRequest params = createTMasterOpRequest(ctx, forwardTimes);
         LOG.info("Forward statement {} to Leader {}", ctx.getStmtId(), thriftAddress);
 
+        // 发送 RPC 请求
         result = ThriftRPCRequestExecutor.call(
                 ThriftConnectionPool.frontendPool,
                 thriftAddress,

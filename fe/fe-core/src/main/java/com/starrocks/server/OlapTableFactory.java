@@ -77,6 +77,7 @@ import org.apache.logging.log4j.Logger;
 import org.threeten.extra.PeriodDuration;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -175,6 +176,7 @@ public class OlapTableFactory implements AbstractTableFactory {
         Preconditions.checkNotNull(distributionDesc);
         DistributionInfo distributionInfo = distributionDesc.toDistributionInfo(baseSchema);
 
+        // 计算 short key 列的数目，SR 规定构成 Short Key 的总 Column 数不能超过 3 个，且总长度不能超过 36 字节
         short shortKeyColumnCount = 0;
         List<Integer> sortKeyIdxes = new ArrayList<>();
         if (stmt.getSortKeys() != null) {
@@ -734,14 +736,17 @@ public class OlapTableFactory implements AbstractTableFactory {
 
                     // this is a 2-level partitioned tables
                     List<Partition> partitions = new ArrayList<>(partitionNameToId.size());
-                    for (Map.Entry<String, Long> entry : partitionNameToId.entrySet()) {
-                        Partition partition = metastore.createPartition(db, table, entry.getValue(), entry.getKey(), version,
-                                tabletIdSet, warehouseId);
+                    // 遍历创建 Partition，期间会为每个 Partition 创建 bucketNum 数量的 Tablet
+                    for (Map.Entry<String, Long> entry /* partitionName -> partitionId */ : partitionNameToId.entrySet()) {
+                        Partition partition = metastore.createPartition(
+                                db, table, entry.getValue(), entry.getKey(), version, tabletIdSet, warehouseId);
                         partitions.add(partition);
                     }
                     // It's ok if partitions is empty.
+                    // 针对每个 Partition 构造对应的 CreateReplicaTask 任务，并以 Thrift RPC 形式发送给对应的 BE 执行
+                    // 阻塞等待执行结果
                     metastore.buildPartitions(db, table, partitions.stream().map(Partition::getSubPartitions)
-                            .flatMap(p -> p.stream()).collect(Collectors.toList()), warehouseId);
+                            .flatMap(Collection::stream).collect(Collectors.toList()), warehouseId);
                     for (Partition partition : partitions) {
                         table.addPartition(partition);
                     }

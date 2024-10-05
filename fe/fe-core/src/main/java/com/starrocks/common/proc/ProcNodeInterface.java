@@ -20,5 +20,7 @@ package com.starrocks.common.proc;
 import com.starrocks.common.AnalysisException;
 
 public interface ProcNodeInterface {
-    public ProcResult fetchResult() throws AnalysisException;
+
+    ProcResult fetchResult() throws AnalysisException;
+
 }

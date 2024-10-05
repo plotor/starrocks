@@ -30,6 +30,7 @@ import com.starrocks.sql.common.StarRocksPlannerException;
 import java.util.List;
 
 public class ShowResultSetMetaData {
+
     private List<Column> columns;
 
     public int getColumnCount() {

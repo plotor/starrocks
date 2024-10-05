@@ -56,6 +56,19 @@ Status CSVFileWriter::init() {
         }
         _column_converters.emplace_back(std::move(nullable_conv), csv::get_converter(type, false));
     }
+
+    std::ostringstream oss;
+    for (size_t i = 0; i < _column_names.size(); ++i) {
+        auto col_name = _column_names[i];
+        oss << col_name;
+        RETURN_IF_ERROR(_output_stream->write(col_name));
+        if (i + 1 != _column_names.size()) {
+            RETURN_IF_ERROR(_output_stream->write(_writer_options->column_terminated_by));
+            oss << ", ";
+        }
+    }
+    RETURN_IF_ERROR(_output_stream->write(_writer_options->line_terminated_by));
+
     return Status::OK();
 }
 

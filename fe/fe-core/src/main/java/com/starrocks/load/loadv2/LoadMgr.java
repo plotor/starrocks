@@ -113,7 +113,9 @@ public class LoadMgr implements Writable, MemoryTrackable {
     private static final Logger LOG = LogManager.getLogger(LoadMgr.class);
     private static final int MEMORY_JOB_SAMPLES = 10;
 
+    // <jobId -> LoadJob>
     private final Map<Long, LoadJob> idToLoadJob = Maps.newConcurrentMap();
+    // <dbId -> <jobLabel -> [LoadJob, LoadJob, ...]>>
     private final Map<Long, Map<String, List<LoadJob>>> dbIdToLabelToLoadJobs = Maps.newConcurrentMap();
     private final LoadJobScheduler loadJobScheduler;
 
@@ -251,6 +253,7 @@ public class LoadMgr implements Writable, MemoryTrackable {
             throw new MetaNotFoundException("Database[" + dbName + "] does not exist");
         }
 
+        // 封装任务为 InsertLoadJob 对象
         InsertLoadJob loadJob;
         if (Objects.requireNonNull(jobType) == EtlJobType.INSERT) {
             loadJob = new InsertLoadJob(label, db.getId(), tableId, txnId, loadId, user,
@@ -261,11 +264,13 @@ public class LoadMgr implements Writable, MemoryTrackable {
         } else {
             throw new LoadException("Unknown job type [" + jobType.name() + "]");
         }
+
+        // 记录 InsertLoadJob 对象
         addLoadJob(loadJob);
         if (!loadJob.isCompleted()) {
             GlobalStateMgr.getCurrentState().getGlobalTransactionMgr().getCallbackFactory().addCallback(loadJob);
         }
-        // persistent
+        // persistent，写 EditLog
         GlobalStateMgr.getCurrentState().getEditLog().logCreateLoadJob(loadJob);
         return loadJob.getId();
     }

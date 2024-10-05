@@ -398,16 +398,20 @@ public class ShowExecutor {
 
         @Override
         public ShowResultSet visitShowProcStmt(ShowProcStmt statement, ConnectContext context) {
+            // 获取最终展示结果表的 Schema 信息，即包含的列信息
             ShowResultSetMetaData metaData = statement.getMetaData();
+            // 获取 SHOW PROC 路径对应的节点
             ProcNodeInterface procNode = statement.getNode();
 
-            List<List<String>> finalRows = null;
+            List<List<String>> finalRows;
             try {
+                // 拉取对应节点的 PROC 数据
                 finalRows = procNode.fetchResult().getRows();
             } catch (AnalysisException e) {
                 throw new SemanticException(e.getMessage());
             }
 
+            // 封装元数据和数据作为结果返回
             return new ShowResultSet(metaData, finalRows);
         }
 

@@ -267,8 +267,7 @@ public class GlobalTransactionMgr implements MemoryTrackable {
 
         LOG.debug("try to commit transaction: {}", transactionId);
         DatabaseTransactionMgr dbTransactionMgr = getDatabaseTransactionMgr(dbId);
-        return dbTransactionMgr.commitTransaction(transactionId, tabletCommitInfos, tabletFailInfos,
-                txnCommitAttachment);
+        return dbTransactionMgr.commitTransaction(transactionId, tabletCommitInfos, tabletFailInfos, txnCommitAttachment);
     }
 
     public void prepareTransaction(long dbId, long transactionId, List<TabletCommitInfo> tabletCommitInfos,
@@ -406,8 +405,8 @@ public class GlobalTransactionMgr implements MemoryTrackable {
         long startTime = System.currentTimeMillis();
         while (true) {
             try {
-                return commitTransactionUnderDatabaseWLock(db, transactionId, tabletCommitInfos, tabletFailInfos,
-                        txnCommitAttachment, timeoutMs);
+                return commitTransactionUnderDatabaseWLock(
+                        db, transactionId, tabletCommitInfos, tabletFailInfos, txnCommitAttachment, timeoutMs);
             } catch (CommitRateExceededException e) {
                 throttleCommitOnRateExceed(e, startTime, timeoutMs);
             } catch (LockTimeoutException e) {
