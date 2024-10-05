@@ -289,6 +289,7 @@ public class InsertStmt extends DmlStmt {
         return forCTAS;
     }
 
+    @Override
     public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitInsertStatement(this, context);
     }

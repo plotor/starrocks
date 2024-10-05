@@ -361,7 +361,7 @@ public class StmtExecutor {
     }
 
     public boolean getIsForwardToLeaderOrInit(boolean isInitIfNoPresent) {
-        if (!isForwardToLeaderOpt.isPresent()) {
+        if (isForwardToLeaderOpt.isEmpty()) {
             if (!isInitIfNoPresent) {
                 return false;
             }
@@ -371,10 +371,12 @@ public class StmtExecutor {
     }
 
     private boolean initForwardToLeaderState() {
+        // 当前节点已经是 Leader
         if (GlobalStateMgr.getCurrentState().isLeader()) {
             return false;
         }
 
+        // 当前节点正在 transfer to leader，轮询等待
         // If this node is transferring to the leader, we should wait for it to complete to avoid forwarding to its own node.
         if (GlobalStateMgr.getCurrentState().isInTransferringToLeader()) {
             long lastPrintTime = -1L;
@@ -398,12 +400,14 @@ public class StmtExecutor {
 
         // this is a query stmt, but this non-master FE can not read, forward it to master
         if (parsedStmt instanceof QueryStatement) {
+            // 检查 follower_query_forward_mode 配置
             // When FollowerQueryForwardMode is not default, forward it to leader or follower by default.
             if (context != null && context.getSessionVariable() != null &&
                     context.getSessionVariable().isFollowerForwardToLeaderOpt().isPresent()) {
                 return context.getSessionVariable().isFollowerForwardToLeaderOpt().get();
             }
 
+            // 当前节点不能提供 read 服务，则 forward to leader
             if (!GlobalStateMgr.getCurrentState().canRead()) {
                 return true;
             }
@@ -464,8 +468,8 @@ public class StmtExecutor {
         // Try to use query id as execution id when execute first time.
         UUID uuid = context.getQueryId();
         context.setExecutionId(UUIDUtil.toTUniqueId(uuid));
+        // 获取所有的 Session 变量
         SessionVariable sessionVariableBackup = context.getSessionVariable();
-
 
         // if use http protocal, use httpResultSender to send result to netty channel
         if (context instanceof HttpConnectContext) {
@@ -477,11 +481,12 @@ public class StmtExecutor {
             // set isQuery before `forwardToLeader` to make it right for audit log.
             context.getState().setIsQuery(isQuery);
 
+            // 尝试自从 query hint 中解析 session 变量
             if (parsedStmt.isExistQueryScopeHint()) {
                 processQueryScopeHint();
             }
 
-            // set warehouse for auditLog
+            // set warehouse for auditLog，默认为 default_warehouse
             context.getAuditEventBuilder().setWarehouse(context.getCurrentWarehouseName());
             LOG.debug("set warehouse {} for stmt: {}", context.getCurrentWarehouseName(), parsedStmt);
 
@@ -508,6 +513,7 @@ public class StmtExecutor {
                         context.getDumpInfo().setOriginStmt(parsedStmt.getOrigStmt().originStmt);
                         context.getDumpInfo().setStatement(parsedStmt);
                     }
+
                     if (parsedStmt instanceof ShowStmt) {
                         com.starrocks.sql.analyzer.Analyzer.analyze(parsedStmt, context);
                         Authorizer.check(parsedStmt, context);
@@ -545,7 +551,12 @@ public class StmtExecutor {
                             }
                         }
                     } else {
+                        // Statement -> ExecPlan
                         execPlan = StatementPlanner.plan(parsedStmt, context);
+                        LOG.info("Planning for {}, and exec plan is \n{}",
+                                parsedStmt.getOrigStmt().originStmt, Optional.ofNullable(execPlan)
+                                        .map(ep -> ep.getExplainString(StatementBase.ExplainLevel.COST))
+                                        .orElse(null));
                         if (parsedStmt instanceof QueryStatement && context.shouldDumpQuery()) {
                             context.getDumpInfo().setExplainInfo(execPlan.getExplainString(TExplainLevel.COSTS));
                         }
@@ -615,6 +626,8 @@ public class StmtExecutor {
                         }
 
                         Preconditions.checkState(execPlanBuildByNewPlanner, "must use new planner");
+
+                        // 执行 ExecPlan
                         handleQueryStmt(retryContext.getExecPlan());
                         break;
                     } catch (Exception e) {
@@ -907,6 +920,7 @@ public class StmtExecutor {
         }
         leaderOpExecutor = new LeaderOpExecutor(parsedStmt, originStmt, context, redirectStatus);
         LOG.debug("need to transfer to Leader. stmt: {}", context.getStmtId());
+        // 构造 Thrift 请求，并发送给 Leader 节点，阻塞等待
         leaderOpExecutor.execute();
     }
 
@@ -1123,6 +1137,7 @@ public class StmtExecutor {
             return;
         }
 
+        // 执行 Query
         coord.exec();
         coord.setTopProfileSupplier(this::buildTopLevelProfile);
         coord.setExecPlan(execPlan);
@@ -1312,10 +1327,10 @@ public class StmtExecutor {
         if (analyzeStmt.isExternal()) {
             if (analyzeStmt.getAnalyzeTypeDesc().isHistogram()) {
                 statisticExecutor.collectStatistics(statsConnectCtx,
-                    new ExternalHistogramStatisticsCollectJob(analyzeStmt.getTableName().getCatalog(),
-                            db, table, analyzeStmt.getColumnNames(), analyzeStmt.getColumnTypes(),
-                            StatsConstants.AnalyzeType.HISTOGRAM, StatsConstants.ScheduleType.ONCE,
-                            analyzeStmt.getProperties()),
+                        new ExternalHistogramStatisticsCollectJob(analyzeStmt.getTableName().getCatalog(),
+                                db, table, analyzeStmt.getColumnNames(), analyzeStmt.getColumnTypes(),
+                                StatsConstants.AnalyzeType.HISTOGRAM, StatsConstants.ScheduleType.ONCE,
+                                analyzeStmt.getProperties()),
                         analyzeStatus,
                         false);
             } else {
@@ -2043,6 +2058,7 @@ public class StmtExecutor {
         boolean insertError = false;
         String trackingSql = "";
         try {
+            // 创建 Coordinator，采用 DefaultCoordinator 实现；
             coord = getCoordinatorFactory().createInsertScheduler(
                     context, execPlan.getFragments(), execPlan.getScanNodes(), execPlan.getDescTbl().toThrift());
 
@@ -2072,8 +2088,11 @@ public class StmtExecutor {
             }
 
             context.setStatisticsJob(AnalyzerUtils.isStatisticsJob(context, parsedStmt));
-            if (!(targetTable.isIcebergTable() || targetTable.isHiveTable() || targetTable.isTableFunctionTable() ||
-                    targetTable.isBlackHoleTable())) {
+            if (!(targetTable.isIcebergTable()
+                    || targetTable.isHiveTable()
+                    || targetTable.isTableFunctionTable()
+                    || targetTable.isBlackHoleTable())) {
+                // 注册 Insert Load 任务
                 jobId = context.getGlobalStateMgr().getLoadMgr().registerLoadJob(
                         label,
                         database.getFullName(),
@@ -2101,11 +2120,13 @@ public class StmtExecutor {
                 return;
             }
 
+            // 调度异步执行 Insert Load 任务
             coord.exec();
             coord.setTopProfileSupplier(this::buildTopLevelProfile);
             coord.setExecPlan(execPlan);
 
-            long jobDeadLineMs = System.currentTimeMillis() + context.getSessionVariable().getQueryTimeoutS() * 1000;
+            long jobDeadLineMs = System.currentTimeMillis() + context.getSessionVariable().getQueryTimeoutS() * 1000L;
+            // 超时等待异步任务执行完成
             coord.join(context.getSessionVariable().getQueryTimeoutS());
             if (!coord.isDone()) {
                 /*
@@ -2143,7 +2164,7 @@ public class StmtExecutor {
 
             if (!coord.getExecStatus().ok()) {
                 String errMsg = coord.getExecStatus().getErrorMsg();
-                if (errMsg.length() == 0) {
+                if (errMsg.isEmpty()) {
                     errMsg = coord.getExecStatus().getErrorCodeString();
                 }
                 LOG.warn("insert failed: {}", errMsg);
@@ -2296,6 +2317,8 @@ public class StmtExecutor {
                 } else {
                     attachment = new InsertTxnCommitAttachment(loadedRows);
                 }
+
+                // 提交事务并超时等待事务 Publish 成功
                 VisibleStateWaiter visibleWaiter = transactionMgr.retryCommitOnRateLimitExceeded(
                         database,
                         transactionId,

@@ -111,7 +111,9 @@ public class LoadMgr implements Writable, MemoryTrackable {
     private static final Logger LOG = LogManager.getLogger(LoadMgr.class);
     private static final int MEMORY_JOB_SAMPLES = 10;
 
+    // <jobId -> LoadJob>
     private final Map<Long, LoadJob> idToLoadJob = Maps.newConcurrentMap();
+    // <dbId -> <jobLabel -> [LoadJob, LoadJob, ...]>>
     private final Map<Long, Map<String, List<LoadJob>>> dbIdToLabelToLoadJobs = Maps.newConcurrentMap();
     private final LoadJobScheduler loadJobScheduler;
 
@@ -234,11 +236,18 @@ public class LoadMgr implements Writable, MemoryTrackable {
         }
     }
 
-    public long registerLoadJob(String label, String dbName, long tableId, long txnId, EtlJobType jobType,
-                                long createTimestamp, long estimateScanRows,
-                                int estimateFileNum, long estimateFileSize,
-                                TLoadJobType type, long timeout, Coordinator coordinator)
-            throws UserException {
+    public long registerLoadJob(String label,
+                                String dbName,
+                                long tableId,
+                                long txnId,
+                                EtlJobType jobType,
+                                long createTimestamp,
+                                long estimateScanRows,
+                                int estimateFileNum,
+                                long estimateFileSize,
+                                TLoadJobType type,
+                                long timeout,
+                                Coordinator coordinator) throws UserException {
 
         // get db id
         Database db = GlobalStateMgr.getCurrentState().getDb(dbName);
@@ -246,6 +255,7 @@ public class LoadMgr implements Writable, MemoryTrackable {
             throw new MetaNotFoundException("Database[" + dbName + "] does not exist");
         }
 
+        // 封装任务为 InsertLoadJob 对象
         InsertLoadJob loadJob;
         if (Objects.requireNonNull(jobType) == EtlJobType.INSERT) {
             loadJob = new InsertLoadJob(label, db.getId(), tableId, createTimestamp, type, timeout, coordinator);
@@ -255,8 +265,11 @@ public class LoadMgr implements Writable, MemoryTrackable {
         } else {
             throw new LoadException("Unknown job type [" + jobType.name() + "]");
         }
+
+        // 记录 InsertLoadJob 对象
         addLoadJob(loadJob);
-        // persistent
+
+        // persistent，写 EditLog
         GlobalStateMgr.getCurrentState().getEditLog().logCreateLoadJob(loadJob);
         return loadJob.getId();
     }

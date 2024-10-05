@@ -286,8 +286,10 @@ public class ConnectProcessor {
         while (ending >= 1 && bytes[ending] == '\0') {
             ending--;
         }
+        // 解析得到原始的 SQL 文本
         originStmt = new String(bytes, 1, ending, StandardCharsets.UTF_8);
         ctx.getAuditEventBuilder().reset();
+        // 设置 Audit Event 基本信息
         ctx.getAuditEventBuilder()
                 .setTimestamp(System.currentTimeMillis())
                 .setClientIp(ctx.getMysqlChannel().getRemoteHostPortString())
@@ -303,13 +305,17 @@ public class ConnectProcessor {
         StatementBase parsedStmt = null;
         try {
             ctx.setQueryId(UUIDUtil.genUUID());
+            // 之所以返回一个 List，是考虑一次执行多条语句的场景
             List<StatementBase> stmts;
             try (Timer ignored = Tracers.watchScope(Tracers.Module.PARSER, "Parser")) {
+                // 基于 Antlr 进行词法解析，语法解析
                 stmts = com.starrocks.sql.parser.SqlParser.parse(originStmt, ctx.getSessionVariable());
+                LOG.info("Stmt size: {}, Input SQL:\n{}", stmts.size(), originStmt);
             } catch (ParsingException parsingException) {
                 throw new AnalysisException(parsingException.getMessage());
             }
 
+            // 逐个遍历执行 Stmt
             for (int i = 0; i < stmts.size(); ++i) {
                 ctx.getState().reset();
                 if (i > 0) {
@@ -350,6 +356,7 @@ public class ConnectProcessor {
                 if (ctx.getIsLastStmt()) {
                     executor.addRunningQueryDetail(parsedStmt);
                 }
+                // 执行 Stmt
                 executor.execute();
 
                 // do not execute following stmt when current stmt failed, this is consistent with mysql server

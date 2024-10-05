@@ -95,6 +95,7 @@ public class AuditEventProcessor {
                     if (auditEvent == null) {
                         continue;
                     }
+                    LOG.info("Found audit event, queryId: {}, stmt: {}", auditEvent.queryId, auditEvent.stmt);
                 } catch (InterruptedException e) {
                     LOG.warn("encounter exception when getting audit event from queue, ignore", e);
                     continue;

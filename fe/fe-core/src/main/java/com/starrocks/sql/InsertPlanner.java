@@ -248,10 +248,12 @@ public class InsertPlanner {
     }
 
     public ExecPlan plan(InsertStmt insertStmt, ConnectContext session) {
+        String sql = insertStmt.getOrigStmt().getOrigStmt();
         QueryRelation queryRelation = insertStmt.getQueryStatement().getQueryRelation();
         List<ColumnRefOperator> outputColumns = new ArrayList<>();
         Table targetTable = insertStmt.getTargetTable();
 
+        // 部分列更新
         if (insertStmt.usePartialUpdate()) {
             inferOutputSchemaForPartialUpdate(insertStmt);
         } else {
@@ -259,38 +261,40 @@ public class InsertPlanner {
             outputFullSchema = targetTable.getFullSchema();
         }
 
-        //1. Process the literal value of the insert values type and cast it into the type of the target table
+        // 1. Process the literal value of the insert values type and cast it into the type of the target table
         if (queryRelation instanceof ValuesRelation) {
             castLiteralToTargetColumnsType(insertStmt);
         }
 
-        //2. Build Logical plan
+        // 2. Build Logical plan
         ColumnRefFactory columnRefFactory = new ColumnRefFactory();
         LogicalPlan logicalPlan;
         try (Timer ignore = Tracers.watchScope("Transform")) {
             logicalPlan = new RelationTransformer(columnRefFactory, session).transform(queryRelation);
+            // LOG.info("SQL:\n{},\nLogicalPlan:\n{}", sql, logicalPlan.getRoot().debugString());
         }
 
-        //3. Fill in the default value and NULL
+        // 3. Fill in the default value and NULL
         OptExprBuilder optExprBuilder = fillDefaultValue(logicalPlan, columnRefFactory, insertStmt, outputColumns);
 
-        //4. Fill key partition columns constant value for data lake format table (hive/iceberg/hudi/delta_lake)
+        // 4. Fill key partition columns constant value for data lake format table (hive/iceberg/hudi/delta_lake)
         if (insertStmt.isSpecifyKeyPartition()) {
             optExprBuilder = fillKeyPartitionsColumn(columnRefFactory, insertStmt, outputColumns, optExprBuilder);
         }
 
-        //5. Fill in the generated columns
+        // 5. Fill in the generated columns
         optExprBuilder = fillGeneratedColumns(columnRefFactory, insertStmt, outputColumns, optExprBuilder, session);
 
-        //6. Fill in the shadow column
+        // 6. Fill in the shadow column
         optExprBuilder = fillShadowColumns(columnRefFactory, insertStmt, outputColumns, optExprBuilder, session);
 
-        //7. Cast output columns type to target type
+        // 7. Cast output columns type to target type
         optExprBuilder =
                 castOutputColumnsTypeToTargetColumns(columnRefFactory, insertStmt, outputColumns, optExprBuilder);
 
-        //8. Optimize logical plan and build physical plan
+        // 8. Optimize logical plan and build physical plan
         logicalPlan = new LogicalPlan(optExprBuilder, outputColumns, logicalPlan.getCorrelation());
+        LOG.info("SQL:\n{},\nLogicalPlan:\n{}", sql, logicalPlan.getRoot().debugString());
 
         // TODO: remove forceDisablePipeline when all the operators support pipeline engine.
         SessionVariable currentVariable = (SessionVariable) session.getSessionVariable().clone();
@@ -310,10 +314,11 @@ public class InsertPlanner {
 
             ExecPlan execPlan =
                     useOptimisticLock ?
-                            buildExecPlanWithRetry(insertStmt, session, outputColumns, logicalPlan, columnRefFactory,
-                                    queryRelation, targetTable) :
-                            buildExecPlan(insertStmt, session, outputColumns, logicalPlan, columnRefFactory,
-                                    queryRelation,
+                            buildExecPlanWithRetry(
+                                    insertStmt, session, outputColumns, logicalPlan, columnRefFactory, queryRelation,
+                                    targetTable) :
+                            buildExecPlan(
+                                    insertStmt, session, outputColumns, logicalPlan, columnRefFactory, queryRelation,
                                     targetTable);
 
             DescriptorTable descriptorTable = execPlan.getDescTbl();
@@ -505,9 +510,10 @@ public class InsertPlanner {
     private ExecPlan buildExecPlan(InsertStmt insertStmt, ConnectContext session, List<ColumnRefOperator> outputColumns,
                                    LogicalPlan logicalPlan, ColumnRefFactory columnRefFactory,
                                    QueryRelation queryRelation, Table targetTable) {
+        String sql = insertStmt.getOrigStmt().getOrigStmt();
         Optimizer optimizer = new Optimizer();
-        PhysicalPropertySet requiredPropertySet = createPhysicalPropertySet(insertStmt, outputColumns,
-                session.getSessionVariable());
+        PhysicalPropertySet requiredPropertySet = createPhysicalPropertySet(
+                insertStmt, outputColumns, session.getSessionVariable());
         OptExpression optimizedPlan;
 
         try (Timer ignore2 = Tracers.watchScope("Optimizer")) {
@@ -517,9 +523,10 @@ public class InsertPlanner {
                     requiredPropertySet,
                     new ColumnRefSet(logicalPlan.getOutputColumn()),
                     columnRefFactory);
+            LOG.info("SQL:\n{},\nOptimized LogicalPlan:\n{}", sql, optimizedPlan.debugString());
         }
 
-        //8. Build fragment exec plan
+        // 8. Build fragment exec plan
         boolean hasOutputFragment = ((queryRelation instanceof SelectRelation && queryRelation.hasLimit())
                 || targetTable instanceof MysqlTable);
         ExecPlan execPlan;
