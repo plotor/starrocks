@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
 set(LIBRARY_OUTPUT_PATH "${BUILD_DIR}/src/starrocks_format")
@@ -70,7 +69,6 @@ if (NOT ${MAKE_TEST} STREQUAL "ON")
 
     install(DIRECTORY DESTINATION ${OUTPUT_DIR}/format-lib/)
 
-    install(TARGETS starrocks_format
-        DESTINATION ${OUTPUT_DIR}/format-lib/)
+    install(TARGETS starrocks_format DESTINATION ${OUTPUT_DIR}/format-lib/)
 
 endif()

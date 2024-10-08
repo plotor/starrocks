@@ -17,6 +17,8 @@
 #include "date_value.h"
 #include "gutil/strings/substitute.h"
 #include "types/timestamp_value.h"
+#include "date_value.h"
+
 
 namespace starrocks {
 

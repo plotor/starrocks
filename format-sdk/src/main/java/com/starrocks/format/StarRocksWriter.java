@@ -49,7 +49,7 @@ public class StarRocksWriter implements AutoCloseable {
                            String tabletRootPath,
                            long txnId,
                            Schema schema,
-                           Map<String, String> config) {
+                           Config config) {
         this.allocator = new RootAllocator();
         this.schema = requireNonNull(schema, "Null schema.");
         if (null == schema.getFields() || schema.getFields().isEmpty()) {
@@ -64,7 +64,7 @@ public class StarRocksWriter implements AutoCloseable {
                 txnId,
                 arrowSchema.memoryAddress(),
                 requireNonNull(tabletRootPath, "Null tablet root path."),
-                requireNonNull(config, "Null config."));
+                requireNonNull(config, "Null config.").toMap());
     }
 
     public void open() {

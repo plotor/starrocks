@@ -51,6 +51,7 @@ public:
               _tablet_root_path(std::move(tablet_root_path)),
               _options(std::move(options)) {
         _loc_provider = std::make_shared<FixedLocationProvider>(_tablet_root_path);
+        _tablet_manager = std::make_shared<TabletManager>(_loc_provider, config::lake_metadata_cache_limit);
 
         auto itr = _options.find(SR_FORMAT_WRITER_TYPE);
         if (itr != _options.end()) {
@@ -81,7 +82,7 @@ public:
             // get tablet schema;
             FORMAT_ASSIGN_OR_RAISE_ARROW_STATUS(auto metadata, get_tablet_metadata(fs));
             _tablet_schema = std::make_shared<TabletSchema>(metadata->schema());
-            _tablet = std::make_unique<Tablet>(_lake_tablet_manager, _tablet_id, _loc_provider, _tablet_schema);
+            _tablet = std::make_unique<Tablet>(_tablet_manager.get(), _tablet_id, _loc_provider, _tablet_schema);
             // create tablet writer
             FORMAT_ASSIGN_OR_RAISE_ARROW_STATUS(_tablet_writer,
                                                 _tablet->new_writer(_writer_type, _txn_id, _max_rows_per_segment));
@@ -188,6 +189,7 @@ private:
     WriterType _writer_type;
     uint32_t _max_rows_per_segment;
     std::shared_ptr<FixedLocationProvider> _loc_provider = nullptr;
+    std::shared_ptr<TabletManager> _tablet_manager = nullptr;
     std::unique_ptr<TabletWriter> _tablet_writer = nullptr;
     std::shared_ptr<RecordBatchToChunkConverter> _arrow_converter = nullptr;
 };

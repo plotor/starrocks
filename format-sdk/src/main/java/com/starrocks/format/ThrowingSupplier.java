@@ -14,6 +14,7 @@
 
 package com.starrocks.format;
 
+
 @FunctionalInterface
 public interface ThrowingSupplier<T, E extends Exception> {
 

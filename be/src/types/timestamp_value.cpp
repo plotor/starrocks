@@ -846,7 +846,7 @@ int64_t TimestampValue::to_unixtime() const {
     return result;
 }
 
-int64_t TimestampValue::to_unixtime(const cctz::time_zone& ctz) const {
+int64_t TimestampValue::to_unixtime(const cctz::time_zone &ctz) const {
     int64_t offset = TimezoneUtils::to_utc_offset(ctz);
     int64_t result = to_unixtime();
     result -= offset * MILLIS_PER_SEC;

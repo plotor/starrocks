@@ -20,6 +20,17 @@
 #include <unordered_map>
 #include <vector>
 
+#define SAFE_CALL_READER_FUNCATION(reader, body)                                   \
+    if (reader != nullptr) {                                                       \
+        try {                                                                      \
+            body;                                                                  \
+        } catch (const std::exception& ex) {                                       \
+            env->ThrowNew(kNativeOptExceptionClass, ex.what());                    \
+        }                                                                          \
+    } else {                                                                       \
+        env->ThrowNew(kNativeOptExceptionClass, "Invalid tablet reader handler!"); \
+    }
+
 #define SAFE_CALL_WRITER_FUNCATION(writer, body)                                   \
     if (writer != nullptr) {                                                       \
         try {                                                                      \
@@ -128,6 +139,21 @@ static std::unordered_map<std::string, std::string> jhashmap_to_cmap(JNIEnv* env
         env->DeleteLocalRef(value);
     }
 
+    return result;
+}
+
+// The jvalue is in big-endian byte-order.
+// because BigInteger.toByteArray alway return big-endian byte-order byte array
+// If the first bit is 1, it is a negative number.
+static inline std::vector<uint8_t> jbyteArray_to_carray(JNIEnv* env, jbyteArray jvalue) {
+    std::vector<uint8_t> result;
+    uint32_t jvalue_bytes = env->GetArrayLength(jvalue);
+    int8_t* src_value = (int8_t*)env->GetByteArrayElements(jvalue, NULL);
+    if (jvalue_bytes > 0) {
+        result.resize(jvalue_bytes);
+        memcpy(result.data(), src_value, jvalue_bytes);
+    }
+    env->ReleaseByteArrayElements(jvalue, src_value, 0);
     return result;
 }
 
