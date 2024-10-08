@@ -53,7 +53,8 @@ under the License.
                     </dependency>
                 </dependencies>
                 <configuration>
-                    <configLocation>checkstyle.xml</configLocation>
+                    <configLocation>${project.basedir}/../checkstyle.xml</configLocation>
+                    <headerLocation>${project.basedir}/../checkstyle-header.txt</headerLocation>
                     <encoding>UTF-8</encoding>
                     <consoleOutput>true</consoleOutput>
                     <failsOnError>true</failsOnError>
