@@ -912,7 +912,7 @@ set(STARROCKS_DEPENDENCIES
     arrow_flight_sql
     gRPC::grpc
     gRPC::grpc++
-    jemalloc # required by arrow
+    # jemalloc # required by arrow FIXME by zhenchao any problems 2024-10-30 16:14:24
     parquet
     orc
     cctz
@@ -970,8 +970,15 @@ endif()
 
 # Add all external dependencies. They should come after the starrocks libs.
 
+set(STARROCKS_STD_DEPENDENCIES
+        -static-libstdc++
+        -static-libgcc
+        -lresolv
+)
+
 set(STARROCKS_LINK_LIBS ${STARROCKS_LINK_LIBS}
     ${STARROCKS_DEPENDENCIES}
+    ${STARROCKS_STD_DEPENDENCIES}
     hdfs
     jvm
 )
@@ -1008,9 +1015,14 @@ if (NOT ("${MAKE_TEST}" STREQUAL "ON" AND "${BUILD_FOR_SANITIZE}" STREQUAL "ON")
     set(STARROCKS_LINK_LIBS ${STARROCKS_LINK_LIBS} -static-libstdc++ -static-libgcc)
 endif()
 
+set(STARROCKS_DYNAMIC_DEPENDENCIES_LIBS
+    -lbfd -liberty -lc -lm -ldl -rdynamic -pthread -Wl,-wrap=__cxa_throw
+)
+
 set(STARROCKS_LINK_LIBS ${STARROCKS_LINK_LIBS}
-    ${WL_LINK_STATIC} -lbfd
-    ${WL_LINK_DYNAMIC} -lresolv -liberty -lc -lm -ldl -rdynamic -pthread -Wl,-wrap=__cxa_throw
+    ${WL_LINK_STATIC}
+    ${WL_LINK_DYNAMIC}
+    ${STARROCKS_DYNAMIC_DEPENDENCIES_LIBS}
 )
 
 # link gcov if WITH_GCOV is on

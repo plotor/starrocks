@@ -18,8 +18,6 @@
 
 namespace starrocks::lake {
 
-extern lake::TabletManager* _lake_tablet_manager;
-
 void starrocks_format_initialize(void);
 
 void starrocks_format_shutdown(void);
